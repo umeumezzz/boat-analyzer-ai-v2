@@ -159,13 +159,31 @@ function parseBefore(html){const $=cheerio.load(html),body=clean($('body').text(
 // v5.6 original exhibition adapters. Venue-specific official pages are primary for
 // lap/turn/straight and can also repair missing common exhibition times.
 const ORIGINAL_SUPPORTED={
- '01':{name:'桐生',parser:'kiryu'},
- '07':{name:'蒲郡',url:(hd,rno)=>`https://www1.gamagori-kyotei.com/asp/gamagori/sp/kyogi/kyogihtml/recomend/recomend${hd}${String(rno).padStart(2,'0')}01.htm`},
- '10':{name:'三国',parser:'mikuni'},
- '12':{name:'住之江',parser:'suminoe'},
- '15':{name:'丸亀',parser:'marugame'},
- '24':{name:'大村',url:(hd,rno)=>`https://omurakyotei.jp/yosou/sp/syussou/?day=${hd}&race=${String(rno).padStart(2,'0')}`,parser:'omura'},
- '23':{name:'唐津',url:(hd,rno)=>`https://www.boatrace-karatsu.jp/sp/index.php?page=yosou-cyokuzen&day=${hd}&race=${rno}`,parser:'karatsu'},
+  '01':{name:'桐生',parser:'kiryu'},
+  '02':{name:'戸田',parser:'boatcast'},
+  '03':{name:'江戸川',parser:'boatcast'},
+  '04':{name:'平和島',parser:'boatcast'},
+  '05':{name:'多摩川',parser:'boatcast'},
+  '06':{name:'浜名湖',parser:'hamanako'},
+  '07':{name:'蒲郡',parser:'boatcast'},
+  '08':{name:'常滑',parser:'boatcast'},
+  '09':{name:'津',parser:'boatcast'},
+  '10':{name:'三国',parser:'mikuni'},
+  '11':{name:'びわこ',parser:'boatcast'},
+  '12':{name:'住之江',parser:'suminoe'},
+  '13':{name:'尼崎',parser:'boatcast'},
+  '14':{name:'鳴門',parser:'boatcast'},
+  '15':{name:'丸亀',parser:'marugame'},
+  '16':{name:'児島',parser:'boatcast'},
+  '17':{name:'宮島',parser:'boatcast'},
+  '18':{name:'徳山',parser:'boatcast'},
+  '19':{name:'下関',parser:'boatcast'},
+  '20':{name:'若松',parser:'boatcast'},
+  '21':{name:'芦屋',parser:'boatcast'},
+  '22':{name:'福岡',parser:'boatcast'},
+  '23':{name:'唐津',parser:'karatsu'},
+  '24':{name:'大村',parser:'omura'},
+};
  // 浜名湖はPC/SPのリアルタイム画面が動的に切り替わるため getOriginal() で公式候補を照合する。
  // 旧 raceinfo-assen は「出場予定選手一覧」で展示ページではないため、取得元から除外。
  '06':{name:'浜名湖',parser:'hamanako'},
@@ -525,7 +543,24 @@ async function getOriginal(jcd,hd,rno,racers=[]){
     requestedDate:hd
   };
 }
-  if(jcd==='12'){
+  const BOATCAST_VENUES=new Set([
+  '02','03','04','05',
+  '08','09','11',
+  '13','14','16','17','18',
+  '19','20','21','22'
+]);
+
+if(BOATCAST_VENUES.has(jcd)){
+  const boatcast=await getBoatcastOriginal(jcd,hd,rno);
+
+  return {
+    supported:true,
+    venue:a.name,
+    ...boatcast,
+    requestedDate:hd
+  };
+}
+if(jcd==='12'){
    const url=`https://www.boatrace-suminoe.jp/asp/kyogi/12/pc/st02${String(rno).padStart(2,'0')}.htm`;
    const html=await grabUrl(url,15);
    return {supported:true,venue:a.name,...parseSuminoeOriginal(html),requestedDate:hd};
