@@ -470,7 +470,31 @@ function parseBoatcastOriginal(text,jcd){
   const p=raw.split('\t'), lane=Number(clean(p[0]||'')); if(!(lane>=1&&lane<=6))continue;
   const vals=p.slice(2,2+labels.length).map(x=>clean(x));
   const row={lane};
-  labels.forEach((lab,i)=>{const v=vals[i]||'';if(!/^\d+(?:\.\d+)?$/.test(v))return;if(lab.includes('一周')||lab.includes('半周ラップ'))row.lap=v;else if(lab.includes('まわり足')||lab.includes('回り足'))row.turn=v;else if(lab.includes('直線'))row.straight=v;});
+  labels.forEach((lab,i)=>{
+  const v=vals[i]||'';
+  if(!/^\d+(?:\.\d+)?$/.test(v))return;
+
+  if(
+    lab.includes('展示タイム') ||
+    lab==='展示'
+  ){
+    row.time=v;
+  }else if(
+    lab.includes('一周') ||
+    lab.includes('半周ラップ')
+  ){
+    row.lap=v;
+  }else if(
+    lab.includes('まわり足') ||
+    lab.includes('回り足')
+  ){
+    row.turn=v;
+  }else if(
+    lab.includes('直線')
+  ){
+    row.straight=v;
+  }
+});
   by.set(lane,row);
  }
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
