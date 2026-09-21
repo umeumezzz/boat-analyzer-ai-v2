@@ -161,6 +161,7 @@ function parseBefore(html){const $=cheerio.load(html),body=clean($('body').text(
 const ORIGINAL_SUPPORTED={
  '01':{name:'桐生',parser:'kiryu'},
  '07':{name:'蒲郡',url:(hd,rno)=>`https://www1.gamagori-kyotei.com/asp/gamagori/sp/kyogi/kyogihtml/recomend/recomend${hd}${String(rno).padStart(2,'0')}01.htm`},
+ '10':{name:'三国',parser:'mikuni'},
  '12':{name:'住之江',parser:'suminoe'},
  '15':{name:'丸亀',parser:'marugame'},
  '24':{name:'大村',url:(hd,rno)=>`https://omurakyotei.jp/yosou/sp/syussou/?day=${hd}&race=${String(rno).padStart(2,'0')}`,parser:'omura'},
@@ -491,6 +492,15 @@ async function getOriginal(jcd,hd,rno,racers=[]){
    const html=await grabUrl('https://www.kiryu-kyotei.com/modules/raceinfo/?page=index_timedata',15);
    return {supported:true,venue:a.name,...parseKiryuTimedata(html,racers),requestedDate:hd};
   }
+  if(jcd==='10'){
+  const boatcast=await getBoatcastOriginal(jcd,hd,rno);
+  return {
+    supported:true,
+    venue:a.name,
+    ...boatcast,
+    requestedDate:hd
+  };
+}
   if(jcd==='12'){
    const url=`https://www.boatrace-suminoe.jp/asp/kyogi/12/pc/st02${String(rno).padStart(2,'0')}.htm`;
    const html=await grabUrl(url,15);
