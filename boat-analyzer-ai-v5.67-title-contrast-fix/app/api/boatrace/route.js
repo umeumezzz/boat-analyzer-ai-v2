@@ -344,11 +344,79 @@ function parseTokuyamaOriginal(html){
 }
 
 function parseTokonameOriginal(html){
-  return strictVenueRows(html,{
-    source:'BOAT RACEとこなめ公式・オリジナル展示',
-    provider:'tokoname-official-strict-v1',
-    straight:true
+  const $=cheerio.load(html);
+  const by=new Map();
+
+  $('table').each((_,table)=>{
+    const tableText=ascii($(table).text());
+
+    if(
+      !tableText.includes('一周') ||
+      !tableText.includes('まわり足') ||
+      !tableText.includes('直線')
+    )return;
+
+    $(table).find('tr').each((_,tr)=>{
+      const text=ascii($(tr).text()).replace(/\s+/g,' ').trim();
+
+      const laneMatch=text.match(/^([1-6])(?:\s|$)/);
+      if(!laneMatch)return;
+
+      const lane=Number(laneMatch[1]);
+
+      const vals=(text.match(/\d+\.\d{2}/g)||[])
+        .map(Number)
+        .filter(Number.isFinite);
+
+      let found=null;
+
+      for(let i=0;i<=vals.length-4;i++){
+        const time=vals[i];
+        const lap=vals[i+1];
+        const turn=vals[i+2];
+        const straight=vals[i+3];
+
+        if(
+          time>=6 && time<9 &&
+          lap>=30 && lap<45 &&
+          turn>=4 && turn<9 &&
+          straight>=5 && straight<9
+        ){
+          found={
+            lane,
+            time:time.toFixed(2),
+            lap:lap.toFixed(2),
+            turn:turn.toFixed(2),
+            straight:straight.toFixed(2)
+          };
+          break;
+        }
+      }
+
+      if(found)by.set(lane,found);
+    });
   });
+
+  const rows=[1,2,3,4,5,6].map(
+    lane=>by.get(lane)||{lane}
+  );
+
+  const complete=rows.filter(
+    r=>r.time&&r.lap&&r.turn&&r.straight
+  ).length;
+
+  return {
+    available:complete===6,
+    rows:complete===6
+      ? rows
+      : [1,2,3,4,5,6].map(lane=>({lane})),
+    completeTimes:complete===6?6:0,
+    originalComplete:complete,
+    source:'BOAT RACEとこなめ公式・オリジナル展示',
+    lapLabel:'1周',
+    provider:'tokoname-official-v2',
+    validation:complete===6?'strict-6of6':'rejected-partial'
+  };
 }
 
 function parseBiwakoOriginal(html){
