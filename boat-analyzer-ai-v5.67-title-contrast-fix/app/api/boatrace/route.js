@@ -184,10 +184,7 @@ const ORIGINAL_SUPPORTED={
   '23':{name:'唐津',parser:'karatsu'},
   '24':{name:'大村',parser:'omura'},
 };
- // 浜名湖はPC/SPのリアルタイム画面が動的に切り替わるため getOriginal() で公式候補を照合する。
- // 旧 raceinfo-assen は「出場予定選手一覧」で展示ページではないため、取得元から除外。
- '06':{name:'浜名湖',parser:'hamanako'},
-};
+
 async function grabUrl(url,ttl=15){const r=await fetch(url,{next:{revalidate:ttl},headers:{'User-Agent':'Mozilla/5.0 AppleWebKit/537.36 Chrome/126 Safari/537.36','Accept-Language':'ja-JP,ja;q=0.9'}});if(!r.ok)throw new Error(`original:${r.status}`);return r.text()}
 function parseOriginalExhibition(html){
  const $=cheerio.load(html), rows=[];
