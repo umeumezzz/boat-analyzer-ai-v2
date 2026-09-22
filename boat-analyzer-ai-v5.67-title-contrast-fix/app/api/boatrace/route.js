@@ -298,7 +298,80 @@ function parseSuminoeOriginal(html){
 function parseMarugameOriginal(html){
  return strictVenueRows(html,{source:'BOAT RACEまるがめ公式・オリジナル展示',provider:'marugame-official-strict-v2',straight:true});
 }
+function parseTokuyamaOriginal(html){
+  const $=cheerio.load(html);
+  const text=ascii($('body').text());
+  const found=[];
 
+  const blocks=text.split(/(?=\d{4}\s)/);
+
+  for(const block of blocks){
+    if(found.length>=6)break;
+
+    const tm=block.match(/展示[：:]\s*(\d+(?:\.\d+)?)/);
+    const lm=block.match(/一周[：:]\s*(\d+(?:\.\d+)?)/);
+    const rm=block.match(/まわり足[：:]\s*(\d+(?:\.\d+)?)/);
+
+    if(!tm||!lm||!rm)continue;
+
+    const time=Number(tm[1]);
+    const lap=Number(lm[1]);
+    const turn=Number(rm[1]);
+
+    if(
+      !(time>=6&&time<9) ||
+      !(lap>=30&&lap<45) ||
+      !(turn>=9&&turn<15)
+    )continue;
+
+    found.push({
+      lane:found.length+1,
+      time:time.toFixed(2),
+      lap:lap.toFixed(2),
+      turn:turn.toFixed(2),
+      straight:''
+    });
+  }
+
+  const complete=found.length===6;
+
+  return {
+    available:complete,
+    rows:complete
+      ? found
+      : [1,2,3,4,5,6].map(lane=>({lane})),
+    completeTimes:complete?6:0,
+    originalComplete:complete?6:0,
+    source:'BOAT RACE徳山公式・オリジナル展示',
+    lapLabel:'1周',
+    provider:'tokuyama-official-v1',
+    validation:complete?'strict-6of6':'rejected-partial'
+  };
+}
+
+function parseTokonameOriginal(html){
+  return strictVenueRows(html,{
+    source:'BOAT RACEとこなめ公式・オリジナル展示',
+    provider:'tokoname-official-strict-v1',
+    straight:true
+  });
+}
+
+function parseBiwakoOriginal(html){
+  return strictVenueRows(html,{
+    source:'BOAT RACEびわこ公式・オリジナル展示',
+    provider:'biwako-official-strict-v1',
+    straight:true
+  });
+}
+
+function parseKojimaOriginal(html){
+  return strictVenueRows(html,{
+    source:'BOAT RACE児島公式・オリジナル展示',
+    provider:'kojima-official-strict-v1',
+    straight:true
+  });
+}
 function parseOmuraOriginal(html){
  const $=cheerio.load(html),by=new Map();
  const clean=s=>ascii(s||'').replace(/\s+/g,'').replace('展示タイム','展示');
@@ -540,10 +613,58 @@ async function getOriginal(jcd,hd,rno,racers=[]){
     requestedDate:hd
   };
 }
+if(jcd==='08'){
+  const url=`https://www.boatrace-tokoname.jp/sp/raceguide/kyogi19/${Number(rno)}/`;
+  const html=await grabUrl(url,15);
+
+  return {
+    supported:true,
+    venue:a.name,
+    ...parseTokonameOriginal(html),
+    requestedDate:hd
+  };
+}
+
+if(jcd==='11'){
+  const url=`https://www.boatrace-biwako.jp/sp/index.php?page=yosou-cyokuzen&race=${Number(rno)}`;
+  const html=await grabUrl(url,15);
+
+  return {
+    supported:true,
+    venue:a.name,
+    ...parseBiwakoOriginal(html),
+    requestedDate:hd
+  };
+}
+
+if(jcd==='16'){
+  const rr=String(rno).padStart(2,'0');
+  const url=`https://www.kojimaboat.jp/asp/kyogi/16/sp/yoso05${rr}.htm`;
+  const html=await grabUrl(url,15);
+
+  return {
+    supported:true,
+    venue:a.name,
+    ...parseKojimaOriginal(html),
+    requestedDate:hd
+  };
+}
+
+if(jcd==='18'){
+  const url=`https://www.boatrace-tokuyama.jp/tenji-keisoku/m/?day=${hd}&race=${Number(rno)}`;
+  const html=await grabUrl(url,15);
+
+  return {
+    supported:true,
+    venue:a.name,
+    ...parseTokuyamaOriginal(html),
+    requestedDate:hd
+  };
+}
   const BOATCAST_VENUES=new Set([
   '02','03','04','05',
-  '08','09','11',
-  '13','14','16','17','18',
+  '09',
+  '13','14','17',
   '19','20','21','22'
 ]);
 
