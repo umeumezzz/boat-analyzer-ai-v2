@@ -301,22 +301,16 @@ function parseMarugameOriginal(html){
 function parseTokuyamaOriginal(html){
   const $=cheerio.load(html);
   const text=ascii($('body').text());
+
+  const re=/展示[：:]\s*(\d+(?:\.\d+)?)[\s\S]*?一周[：:]\s*(\d+(?:\.\d+)?)[\s\S]*?まわり足[：:]\s*(\d+(?:\.\d+)?)/g;
+
   const found=[];
+  let m;
 
-  const blocks=text.split(/(?=\d{4}\s)/);
-
-  for(const block of blocks){
-    if(found.length>=6)break;
-
-    const tm=block.match(/展示[：:]\s*(\d+(?:\.\d+)?)/);
-    const lm=block.match(/一周[：:]\s*(\d+(?:\.\d+)?)/);
-    const rm=block.match(/まわり足[：:]\s*(\d+(?:\.\d+)?)/);
-
-    if(!tm||!lm||!rm)continue;
-
-    const time=Number(tm[1]);
-    const lap=Number(lm[1]);
-    const turn=Number(rm[1]);
+  while((m=re.exec(text)) && found.length<6){
+    const time=Number(m[1]);
+    const lap=Number(m[2]);
+    const turn=Number(m[3]);
 
     if(
       !(time>=6&&time<9) ||
@@ -344,7 +338,7 @@ function parseTokuyamaOriginal(html){
     originalComplete:complete?6:0,
     source:'BOAT RACE徳山公式・オリジナル展示',
     lapLabel:'1周',
-    provider:'tokuyama-official-v1',
+    provider:'tokuyama-official-v2',
     validation:complete?'strict-6of6':'rejected-partial'
   };
 }
