@@ -344,78 +344,42 @@ function parseTokuyamaOriginal(html){
 }
 
 function parseTokonameOriginal(html){
-  const $=cheerio.load(html);
-  const by=new Map();
-
-  $('table').each((_,table)=>{
-    const tableText=ascii($(table).text());
-
-    if(
-      !tableText.includes('一周') ||
-      !tableText.includes('まわり足') ||
-      !tableText.includes('直線')
-    )return;
-
-    $(table).find('tr').each((_,tr)=>{
-      const text=ascii($(tr).text()).replace(/\s+/g,' ').trim();
-
-      const laneMatch=text.match(/^([1-6])(?:\s|$)/);
-      if(!laneMatch)return;
-
-      const lane=Number(laneMatch[1]);
-
-      const vals=(text.match(/\d+\.\d{2}/g)||[])
-        .map(Number)
-        .filter(Number.isFinite);
-
-      let found=null;
-
-      for(let i=0;i<=vals.length-4;i++){
-        const time=vals[i];
-        const lap=vals[i+1];
-        const turn=vals[i+2];
-        const straight=vals[i+3];
-
-        if(
-          time>=6 && time<9 &&
-          lap>=30 && lap<45 &&
-          turn>=4 && turn<9 &&
-          straight>=5 && straight<9
-        ){
-          found={
-            lane,
-            time:time.toFixed(2),
-            lap:lap.toFixed(2),
-            turn:turn.toFixed(2),
-            straight:straight.toFixed(2)
-          };
-          break;
-        }
-      }
-
-      if(found)by.set(lane,found);
-    });
+  // 常滑公式の「オリジナル展示データ」表を列名で厳密に取得する。
+  // 選手情報側の数値（勝率・年齢等）を誤って拾わないよう、
+  // 展示タイム / 一周 / まわり足 / 直線のヘッダー位置を基準にする。
+  const parsed=parseVenueOriginalTable(html,{
+    source:'BOAT RACEとこなめ公式・オリジナル展示',
+    provider:'tokoname-official-v3',
+    straight:true
   });
 
-  const rows=[1,2,3,4,5,6].map(
-    lane=>by.get(lane)||{lane}
-  );
+  const rows=[1,2,3,4,5,6].map(lane=>{
+    const r=(parsed.rows||[]).find(x=>Number(x.lane)===lane)||{lane};
+    return {
+      lane,
+      time:r.time||'',
+      lap:r.lap||'',
+      turn:r.turn||'',
+      straight:r.straight||''
+    };
+  });
 
-  const complete=rows.filter(
-    r=>r.time&&r.lap&&r.turn&&r.straight
+  const complete=rows.filter(r=>
+    /^6\.\d{2}$/.test(r.time||'') &&
+    /^(?:3[0-9]|4[0-4])\.\d{2}$/.test(r.lap||'') &&
+    /^[4-8]\.\d{2}$/.test(r.turn||'') &&
+    /^[5-8]\.\d{2}$/.test(r.straight||'')
   ).length;
 
   return {
     available:complete===6,
-    rows:complete===6
-      ? rows
-      : [1,2,3,4,5,6].map(lane=>({lane})),
+    rows:complete===6 ? rows : [1,2,3,4,5,6].map(lane=>({lane})),
     completeTimes:complete===6?6:0,
     originalComplete:complete,
     source:'BOAT RACEとこなめ公式・オリジナル展示',
     lapLabel:'1周',
-    provider:'tokoname-official-v2',
-    validation:complete===6?'strict-6of6':'rejected-partial'
+    provider:'tokoname-official-v3',
+    validation:complete===6?'strict-header-6of6':'rejected-partial'
   };
 }
 
