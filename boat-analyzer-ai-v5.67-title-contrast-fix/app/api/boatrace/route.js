@@ -1157,8 +1157,27 @@ export async function GET(req){
      return {jcd:code,venue:ORIGINAL_SUPPORTED[code]?.name||code,hosting:false,status:'fetch-error'};
     }
    }));
-   const hosting=rows.filter(x=>x.hosting),review=hosting.filter(x=>x.needsReview);
-   const summary={venues:24,hosting:hosting.length,complete:hosting.filter(x=>x.status==='complete').length,needsReview:review.length,fetchErrors:rows.filter(x=>x.status==='fetch-error').length};
+   // Retry only suspicious venues once, bypassing the short-lived in-process result.
+   // This filters transient origin/network failures without doubling normal audit traffic.
+   const suspects=rows.filter(x=>x.status==='fetch-error'||x.needsReview);
+   if(suspects.length){
+    await new Promise(resolve=>setTimeout(resolve,350));
+    await Promise.all(suspects.map(async item=>{
+     try{
+      const retryHtml=await grab(`racelist?hd=${hd}&jcd=${item.jcd}&rno=${rno||1}`,1);
+      const retryRacers=parseRace(retryHtml).racers;
+      if(retryRacers.length!==6)return;
+      const retrySeries=parseSeries(retryHtml,retryRacers);
+      item.retry={attempted:true,parsed:retrySeries.count||0,status:retrySeries.status};
+      if(retrySeries.status==='complete'){
+       item.hosting=true;item.racers=6;item.parsed=retrySeries.count||0;item.runCount=retrySeries.runCount||0;
+       item.status='complete';item.needsReview=false;item.recovered=true;
+      }
+     }catch(e){item.retry={attempted:true,status:'fetch-error'}}
+    }));
+   }
+   const hosting=rows.filter(x=>x.hosting),review=hosting.filter(x=>x.needsReview),unrecoveredFetchErrors=rows.filter(x=>x.status==='fetch-error');
+   const summary={venues:24,hosting:hosting.length,complete:hosting.filter(x=>x.status==='complete').length,needsReview:review.length,fetchErrors:unrecoveredFetchErrors.length,recovered:rows.filter(x=>x.recovered).length};
    const audit={hd,rno:Number(rno||1),summary,review,rows,updatedAt:new Date().toISOString()};
    if(review.length||summary.fetchErrors)console.warn('[series-audit]',JSON.stringify({hd,summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,parsed:x.parsed,status:x.status}))}));
    else console.log('[series-audit]',JSON.stringify({hd,summary}));
