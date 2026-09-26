@@ -1149,7 +1149,17 @@ export async function GET(req){
     }catch(e){}
    }
    const series=parseSeries(raceHtml,racers);
-   return Response.json({ok:true,series,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=60, stale-while-revalidate=300'}})
+   // A partial parse is useful for diagnosis but unsafe for prediction features: expose
+   // completeness explicitly so the UI can show "一部取得" instead of silently treating
+   // missing racers as no current-series history.
+   const completeness={
+    racers:racers.length,
+    parsed:series.count||0,
+    missing:Math.max(0,racers.length-(series.count||0)),
+    complete:racers.length===6&&series.count===6,
+    needsReview:series.status==='partial'||series.status==='empty-or-unparsed'
+   };
+   return Response.json({ok:true,series,completeness,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=60, stale-while-revalidate=300'}})
   }
   // First paint: start official/original exhibition scraping immediately instead of
   // waiting for racelist parsing first. Kiryu still needs racer names, so it keeps the
