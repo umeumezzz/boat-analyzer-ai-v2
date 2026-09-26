@@ -383,19 +383,41 @@ function parseTokonameOriginal(html){
   };
 }
 
+function strictOfficialFourMetricVenue(html,{source,provider}={}){
+  // 公式表の列名を第一優先で読む。rowspan/colspan の場合だけ既存の厳格な
+  // 物理レンジ検証へフォールバックし、6艇完備しない限りAIには渡さない。
+  const parsed=parseVenueOriginalTable(html,{source,provider,straight:true});
+  const rows=[1,2,3,4,5,6].map(lane=>{
+    const r=(parsed.rows||[]).find(x=>Number(x.lane)===lane)||{lane};
+    return {lane,time:r.time||'',lap:r.lap||'',turn:r.turn||'',straight:r.straight||''};
+  });
+  const valid=r=>
+    /^6\.\d{2}$/.test(r.time||'') &&
+    /^(?:3[0-9]|4[0-4])\.\d{2}$/.test(r.lap||'') &&
+    /^[4-8]\.\d{2}$/.test(r.turn||'') &&
+    /^[5-8]\.\d{2}$/.test(r.straight||'');
+  const complete=rows.filter(valid).length;
+  return {
+    available:complete===6,
+    rows:complete===6?rows:[1,2,3,4,5,6].map(lane=>({lane})),
+    completeTimes:complete===6?6:0,
+    originalComplete:complete,
+    source,lapLabel:'1周',provider,
+    validation:complete===6?'strict-header-6of6':'rejected-partial'
+  };
+}
+
 function parseBiwakoOriginal(html){
-  return strictVenueRows(html,{
+  return strictOfficialFourMetricVenue(html,{
     source:'BOAT RACEびわこ公式・オリジナル展示',
-    provider:'biwako-official-strict-v1',
-    straight:true
+    provider:'biwako-official-v2'
   });
 }
 
 function parseKojimaOriginal(html){
-  return strictVenueRows(html,{
+  return strictOfficialFourMetricVenue(html,{
     source:'BOAT RACE児島公式・オリジナル展示',
-    provider:'kojima-official-strict-v1',
-    straight:true
+    provider:'kojima-official-v2'
   });
 }
 function parseOmuraOriginal(html){
