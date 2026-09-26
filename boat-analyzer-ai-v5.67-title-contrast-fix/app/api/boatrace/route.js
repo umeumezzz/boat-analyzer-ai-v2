@@ -116,7 +116,13 @@ function parseSeries(html,racers){
   }
   rows.push({reg:racer.reg,name:racer.name,runs:runs.slice(0,14),values:runs.slice(0,14).map(x=>x.raw)});
  }
- return {rows,count:rows.filter(x=>x.runs.length).length,parser:'v5.15-bounded-flex-series'};
+ const count=rows.filter(x=>x.runs.length).length;
+ const runCount=rows.reduce((n,x)=>n+x.runs.length,0);
+ // Diagnostic metadata lets the client distinguish a legitimate empty first-day table
+ // from a parser miss without another upstream request.
+ const sourceHasSeries=/今節成績/.test(clean(cheerio.load(html)('body').text()));
+ const status=count===6?'complete':count>0?'partial':sourceHasSeries?'empty-or-unparsed':'not-published';
+ return {rows,count,runCount,status,sourceHasSeries,parser:'v5.16-series-diagnostics'};
 }
 function parseOmuraSeries(html,racers){
  const $=cheerio.load(html), runsBy=Array.from({length:6},()=>[]), avgST=Array(6).fill('');
