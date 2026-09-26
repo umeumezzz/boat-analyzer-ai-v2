@@ -1164,12 +1164,28 @@ export async function GET(req){
   // First paint: start official/original exhibition scraping immediately instead of
   // waiting for racelist parsing first. Kiryu still needs racer names, so it keeps the
   // dependency; every other venue can overlap the network waits.
-  const originalTask=jcd==='01'?null:getOriginal(jcd,hd,rno);
-  const [rr,bb]=await Promise.allSettled([grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,45),grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20)]);
+  // Attach every independent fetch to allSettled immediately. This keeps the fast
+  // overlap from v5.67 while also handling an early original-site rejection safely.
+  let rr,bb,original;
+  if(jcd==='01'){
+   [rr,bb]=await Promise.allSettled([grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,45),grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20)]);
+   if(rr.status!=='fulfilled')return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}});
+   const race=parseRace(rr.value);
+   const [oo]=await Promise.allSettled([getOriginal(jcd,hd,rno,race.racers)]);
+   original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]};
+   const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},before=mergeBefore(commonBefore,original);
+   return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race,before},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
+  }
+  let oo;
+  [rr,bb,oo]=await Promise.allSettled([
+   grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,45),
+   grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),
+   getOriginal(jcd,hd,rno)
+  ]);
   if(rr.status!=='fulfilled')return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}});
   const race=parseRace(rr.value);
-  const oo=await Promise.allSettled([originalTask||getOriginal(jcd,hd,rno,race.racers)]);
-  const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},original=oo[0]?.status==='fulfilled'?oo[0].value:{supported:false,available:false,rows:[]},before=mergeBefore(commonBefore,original);
+  original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]};
+  const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},before=mergeBefore(commonBefore,original);
   return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race,before},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
  }catch(e){return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})}
 }
