@@ -130,3 +130,6 @@ html,body{background:#03152d;}
 
 /* Public data-state messaging */
 .publicDataAlert{margin:10px 0 16px;padding:12px 14px;border:1px solid rgba(255,190,70,.5);border-radius:12px;background:rgba(255,190,70,.08);display:flex;gap:5px;flex-direction:column}.publicDataAlert b{font-size:13px}.publicDataAlert span{font-size:13px}.publicDataAlert small{opacity:.7;line-height:1.5}
+
+/* Public race data completeness */
+.dataQuality{margin:8px 0 16px;padding:12px 14px;border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05)}.dataQuality div{display:flex;flex-direction:column;gap:3px}.dataQuality b{font-size:13px}.dataQuality span,.dataQuality small{font-size:11px;opacity:.72}.dataQuality.ready{border-color:rgba(80,210,145,.45);background:rgba(80,210,145,.08)}.dataQuality.ready b{color:#8be0b3}@media(max-width:600px){.dataQuality{align-items:flex-start;flex-direction:column;gap:5px}.dataQuality span{line-height:1.5}}
