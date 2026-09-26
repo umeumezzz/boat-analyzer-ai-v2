@@ -1136,7 +1136,25 @@ export async function GET(req){
    const html=await grab(`odds3t?hd=${hd}&jcd=${jcd}&rno=${rno}`,15),odds=parseOdds(html);
    return Response.json({ok:true,updatedAt:new Date().toISOString(),odds,count:odds.length},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
   }
-  if(kind==='series'){
+  if(kind==='seriesaudit'){
+   // One request audits all 24 venues for current-series parser completeness.
+   // Non-hosting venues are reported separately instead of being counted as parser failures.
+   const venues=Object.keys(ORIGINAL_SUPPORTED);
+   const rows=await Promise.all(venues.map(async code=>{
+    try{
+     const html=await grab(`racelist?hd=${hd}&jcd=${code}&rno=${rno||1}`,60);
+     const racers=parseRace(html).racers;
+     if(racers.length!==6)return {jcd:code,venue:ORIGINAL_SUPPORTED[code]?.name||code,hosting:false,racers:racers.length,status:'not-hosting'};
+     const series=parseSeries(html,racers);
+     return {jcd:code,venue:ORIGINAL_SUPPORTED[code]?.name||code,hosting:true,racers:6,parsed:series.count||0,runCount:series.runCount||0,status:series.status,needsReview:series.status==='partial'||series.status==='empty-or-unparsed'};
+    }catch(e){
+     return {jcd:code,venue:ORIGINAL_SUPPORTED[code]?.name||code,hosting:false,status:'fetch-error'};
+    }
+   }));
+   const hosting=rows.filter(x=>x.hosting),review=hosting.filter(x=>x.needsReview);
+   return Response.json({ok:true,hd,rno:Number(rno||1),summary:{venues:24,hosting:hosting.length,complete:hosting.filter(x=>x.status==='complete').length,needsReview:review.length},review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=60, stale-while-revalidate=300'}})
+  }
+ if(kind==='series'){
    const raceHtml=await grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,60);
    const racers=parseRace(raceHtml).racers;
    // Omura publishes current-series results explicitly as finish + entry course + ST.
