@@ -5,9 +5,19 @@ export const dynamic='force-dynamic';
 export const preferredRegion='hnd1';
 const base='https://www.boatrace.jp/owpc/pc/race/';
 const clean=s=>(s||'').replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim();
+const REQUEST_HEADERS={'User-Agent':'Mozilla/5.0 AppleWebKit/537.36 Chrome/126 Safari/537.36','Accept-Language':'ja-JP,ja;q=0.9'};
+const inflight=new Map();
+async function cachedText(url,ttl){
+ const key=`${ttl}:${url}`;
+ if(inflight.has(key))return inflight.get(key);
+ const task=fetch(url,{next:{revalidate:ttl},headers:REQUEST_HEADERS})
+  .then(r=>{if(!r.ok)throw new Error(String(r.status));return r.text()})
+  .finally(()=>inflight.delete(key));
+ inflight.set(key,task);
+ return task;
+}
 async function grab(path,ttl=20){
- const r=await fetch(base+path,{next:{revalidate:ttl},headers:{'User-Agent':'Mozilla/5.0 AppleWebKit/537.36 Chrome/126 Safari/537.36','Accept-Language':'ja-JP,ja;q=0.9'}});
- if(!r.ok)throw new Error(String(r.status));return r.text()
+ return cachedText(base+path,ttl);
 }
 function parseRace(html){
  const $=cheerio.load(html),racers=[];
@@ -185,7 +195,10 @@ const ORIGINAL_SUPPORTED={
   '24':{name:'大村',parser:'omura'},
 };
 
-async function grabUrl(url,ttl=15){const r=await fetch(url,{next:{revalidate:ttl},headers:{'User-Agent':'Mozilla/5.0 AppleWebKit/537.36 Chrome/126 Safari/537.36','Accept-Language':'ja-JP,ja;q=0.9'}});if(!r.ok)throw new Error(`original:${r.status}`);return r.text()}
+async function grabUrl(url,ttl=15){
+ try{return await cachedText(url,ttl)}
+ catch(e){throw new Error(`original:${e?.message||e}`)}
+}
 function parseOriginalExhibition(html){
  const $=cheerio.load(html), rows=[];
  $('tr').each((_,tr)=>{
