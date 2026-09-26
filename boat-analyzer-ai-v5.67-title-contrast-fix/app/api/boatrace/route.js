@@ -1142,6 +1142,46 @@ export async function GET(req){
    const html=await grab(`odds3t?hd=${hd}&jcd=${jcd}&rno=${rno}`,15),odds=parseOdds(html);
    return Response.json({ok:true,updatedAt:new Date().toISOString(),odds,count:odds.length},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
   }
+  if(kind==='fullaudit'){
+   // Scheduled health audit: one representative race per venue, all core data families.
+   // Missing pre-race data is classified separately from parser/transport failures.
+   const raceNo=Number(rno||1),venues=Object.keys(ORIGINAL_SUPPORTED);
+   const rows=await Promise.all(venues.map(async code=>{
+    const venue=ORIGINAL_SUPPORTED[code]?.name||code;
+    try{
+     const [rr,bb,or,od]=await Promise.allSettled([
+      grab(`racelist?hd=${hd}&jcd=${code}&rno=${raceNo}`,60),
+      grab(`beforeinfo?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
+      getOriginal(code,hd,raceNo),
+      grab(`odds3t?hd=${hd}&jcd=${code}&rno=${raceNo}`,20)
+     ]);
+     if(rr.status!=='fulfilled')return {jcd:code,venue,hosting:false,status:'racelist-fetch-error',needsReview:true};
+     const race=parseRace(rr.value).racers;
+     if(race.length!==6)return {jcd:code,venue,hosting:false,status:'not-hosting',needsReview:false};
+     const series=parseSeries(rr.value,race);
+     const before=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],completeTimes:0,completeST:0};
+     const original=or.status==='fulfilled'?or.value:{available:false,rows:[],error:'fetch-error'};
+     const odds=od.status==='fulfilled'?parseOdds(od.value):[];
+     const issues=[];
+     if(series.status==='partial'||series.status==='empty-or-unparsed')issues.push('series');
+     // Before/original/odds can legitimately be unpublished hours before the race.
+     // Transport/parser errors are always reviewable; simple absence is reported but not failed.
+     if(bb.status==='rejected')issues.push('before-fetch');
+     if(or.status==='rejected'||original.error)issues.push('original-fetch');
+     if(od.status==='rejected')issues.push('odds-fetch');
+     return {jcd:code,venue,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
+      race:{racers:race.length},series:{parsed:series.count||0,runCount:series.runCount||0,status:series.status},
+      before:{available:!!before.available,exhibitionTimes:before.completeTimes||0,startTiming:before.completeST||0},
+      original:{available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null},
+      odds:{count:odds.length}};
+    }catch(e){return {jcd:code,venue,hosting:false,status:'audit-error',needsReview:true,error:String(e?.message||e)}}
+   }));
+   const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
+   const summary={venues:24,hosting:hosting.length,healthy:hosting.filter(x=>x.status==='ok').length,needsReview:review.length};
+   if(review.length)console.warn('[full-audit]',JSON.stringify({hd,rno:raceNo,summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,status:x.status,issues:x.issues||[]}))}));
+   else console.log('[full-audit]',JSON.stringify({hd,rno:raceNo,summary}));
+   return Response.json({ok:true,hd,rno:raceNo,summary,review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}})
+  }
   if(kind==='seriesaudit'){
    // One request audits all 24 venues for current-series parser completeness.
    // Non-hosting venues are reported separately instead of being counted as parser failures.
