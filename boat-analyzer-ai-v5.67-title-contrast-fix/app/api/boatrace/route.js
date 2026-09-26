@@ -299,47 +299,37 @@ function parseMarugameOriginal(html){
  return strictVenueRows(html,{source:'BOAT RACEまるがめ公式・オリジナル展示',provider:'marugame-official-strict-v2',straight:true});
 }
 function parseTokuyamaOriginal(html){
+  // 徳山公式の計測ページは各艇ブロック内に
+  // 「展示 → 一周 → まわり足」が並ぶ。登録番号を艇ブロック境界として扱い、
+  // ページ全体を横断する正規表現で艇を取り違えないようにする。
   const $=cheerio.load(html);
-  const text=ascii($('body').text());
+  const text=ascii($('body').text()).replace(/\s+/g,' ').trim();
+  const marks=[...text.matchAll(/(?:^|\s)(\d{4})(?=\s)/g)];
+  const rows=[];
 
-  const re=/展示[：:]\s*(\d+(?:\.\d+)?)[\s\S]*?一周[：:]\s*(\d+(?:\.\d+)?)[\s\S]*?まわり足[：:]\s*(\d+(?:\.\d+)?)/g;
-
-  const found=[];
-  let m;
-
-  while((m=re.exec(text)) && found.length<6){
-    const time=Number(m[1]);
-    const lap=Number(m[2]);
-    const turn=Number(m[3]);
-
-    if(
-      !(time>=6&&time<9) ||
-      !(lap>=30&&lap<45) ||
-      !(turn>=9&&turn<15)
-    )continue;
-
-    found.push({
-      lane:found.length+1,
-      time:time.toFixed(2),
-      lap:lap.toFixed(2),
-      turn:turn.toFixed(2),
-      straight:''
-    });
+  for(let i=0;i<marks.length&&rows.length<6;i++){
+    const from=marks[i].index;
+    const to=i+1<marks.length?marks[i+1].index:text.length;
+    const block=text.slice(from,to);
+    const tm=block.match(/展示[：:]\s*(\d+(?:\.\d+)?)/);
+    const lm=block.match(/一周[：:]\s*(\d+(?:\.\d+)?)/);
+    const rm=block.match(/まわり足[：:]\s*(\d+(?:\.\d+)?)/);
+    if(!tm||!lm||!rm)continue;
+    const time=Number(tm[1]),lap=Number(lm[1]),turn=Number(rm[1]);
+    if(!(time>=6&&time<9)||!(lap>=30&&lap<45)||!(turn>=9&&turn<15))continue;
+    rows.push({lane:rows.length+1,time:time.toFixed(2),lap:lap.toFixed(2),turn:turn.toFixed(2),straight:''});
   }
 
-  const complete=found.length===6;
-
+  const complete=rows.length===6;
   return {
     available:complete,
-    rows:complete
-      ? found
-      : [1,2,3,4,5,6].map(lane=>({lane})),
+    rows:complete?rows:[1,2,3,4,5,6].map(lane=>({lane})),
     completeTimes:complete?6:0,
     originalComplete:complete?6:0,
     source:'BOAT RACE徳山公式・オリジナル展示',
     lapLabel:'1周',
-    provider:'tokuyama-official-v2',
-    validation:complete?'strict-6of6':'rejected-partial'
+    provider:'tokuyama-official-v3',
+    validation:complete?'strict-block-6of6':'rejected-partial'
   };
 }
 
