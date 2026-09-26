@@ -1067,7 +1067,9 @@ function parseOfficialSeason(html){
 }
 
 export async function GET(req){
- const q=new URL(req.url).searchParams,hd=q.get('hd'),jcd=q.get('jcd'),rno=q.get('rno'),kind=q.get('kind')||'core';
+ const q=new URL(req.url).searchParams;
+ const jstDate=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()).replace(/-/g,'');
+ const hd=q.get('hd')||jstDate,jcd=q.get('jcd'),rno=q.get('rno'),kind=q.get('kind')||'core';
  if(kind==='racersearch'){
   const term=clean(q.get('q')||''); if(!term)return Response.json({ok:true,rows:[]});
   try{const isReg=/^\d{4}$/.test(term),url=isReg?`https://www.boatrace.jp/owpc/pc/data/racersearch/result?prevpgid=TDAT320&toban_left=${term}`:`https://www.boatrace.jp/owpc/pc/data/racersearch/result?prevpgid=TDAT320&name=${encodeURIComponent(term)}`;const html=await grabUrl(url,300);return Response.json({ok:true,rows:parseRacerSearch(html)})}catch{return Response.json({ok:false,rows:[]})}
@@ -1156,7 +1158,11 @@ export async function GET(req){
     }
    }));
    const hosting=rows.filter(x=>x.hosting),review=hosting.filter(x=>x.needsReview);
-   return Response.json({ok:true,hd,rno:Number(rno||1),summary:{venues:24,hosting:hosting.length,complete:hosting.filter(x=>x.status==='complete').length,needsReview:review.length},review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=60, stale-while-revalidate=300'}})
+   const summary={venues:24,hosting:hosting.length,complete:hosting.filter(x=>x.status==='complete').length,needsReview:review.length,fetchErrors:rows.filter(x=>x.status==='fetch-error').length};
+   const audit={hd,rno:Number(rno||1),summary,review,rows,updatedAt:new Date().toISOString()};
+   if(review.length||summary.fetchErrors)console.warn('[series-audit]',JSON.stringify({hd,summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,parsed:x.parsed,status:x.status}))}));
+   else console.log('[series-audit]',JSON.stringify({hd,summary}));
+   return Response.json({ok:true,...audit},{headers:{'Cache-Control':'no-store'}})
   }
  if(kind==='series'){
    const raceHtml=await grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,60);
