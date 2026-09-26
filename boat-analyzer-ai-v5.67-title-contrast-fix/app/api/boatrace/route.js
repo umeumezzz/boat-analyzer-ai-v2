@@ -120,9 +120,13 @@ function parseSeries(html,racers){
  const runCount=rows.reduce((n,x)=>n+x.runs.length,0);
  // Diagnostic metadata lets the client distinguish a legitimate empty first-day table
  // from a parser miss without another upstream request.
- const sourceHasSeries=/今節成績/.test(clean(cheerio.load(html)('body').text()));
- const status=count===6?'complete':count>0?'partial':sourceHasSeries?'empty-or-unparsed':'not-published';
- return {rows,count,runCount,status,sourceHasSeries,parser:'v5.16-series-diagnostics'};
+ const sourceText=clean(cheerio.load(html)('body').text());
+ const sourceHasSeries=/今節成績/.test(sourceText);
+ // First-day cards legitimately have the section header but no completed runs yet.
+ // Do not send those to the parser-failure queue.
+ const firstDay=/初日|第?1日/.test(sourceText);
+ const status=count===6?'complete':count>0?'partial':sourceHasSeries&&firstDay?'not-published':sourceHasSeries?'empty-or-unparsed':'not-published';
+ return {rows,count,runCount,status,sourceHasSeries,firstDay,parser:'v5.17-first-day-aware-series'};
 }
 function parseOmuraSeries(html,racers){
  const $=cheerio.load(html), runsBy=Array.from({length:6},()=>[]), avgST=Array(6).fill('');
