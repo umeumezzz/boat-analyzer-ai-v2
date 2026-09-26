@@ -90,28 +90,33 @@ function parseSeries(html,racers){
     runs=extractTriples(nested);
    }
 
-   // v5.14 fallback: BOAT RACE sometimes renders 今節成績 as a compact/nested text block.
-   // Read only the current racer's row/block and recognize course -> ST -> finish triplets.
-   // This avoids depending on a particular nested-table column layout.
+   // Compact/nested fallback. The official table can collapse each run to text and
+   // sometimes inserts the race number between course/ST/finish. Parse only inside the
+   // current racer's bounded block so another racer's results can never leak in.
    if(!runs.length){
-    const anchor=$(allTr[idx]);
-    const scopes=[anchor,anchor.closest('tbody')];
-    for(const scope of scopes){
-     if(!scope||!scope.length)continue;
-     const raw=ascii(scope.text()).replace(/([1-6])着/g,'$1');
-     const tokens=raw.split(/\s+/).map(ascii).filter(Boolean);
-     const got=[];
-     for(let k=0;k<tokens.length-2;k++){
-      const course=tokens[k],st=tokens[k+1],finish=tokens[k+2].replace('着','');
-      if(courseOK(course)&&stOK(st)&&finishOK(finish))got.push({course,st,finish,raw:`${course} ${st} ${finish}`});
+    const stop=allTr.findIndex((tr,i)=>i>idx&&racers.some(x=>x.reg!==racer.reg&&hasReg(tr,x.reg)));
+    const blockEnd=stop>idx?stop:Math.min(allTr.length,idx+10);
+    const blockText=ascii(allTr.slice(idx,blockEnd).map(tr=>$(tr).text()).join(' ')).replace(/([1-6])着/g,'$1');
+    const tokens=blockText.split(/\s+/).map(ascii).filter(Boolean);
+    const got=[];
+    for(let k=0;k<tokens.length;k++){
+     if(!courseOK(tokens[k]))continue;
+     // Allow one harmless token (e.g. race number/day marker) between the three values.
+     for(let s=k+1;s<=Math.min(k+2,tokens.length-1);s++){
+      if(!stOK(tokens[s]))continue;
+      for(let z=s+1;z<=Math.min(s+2,tokens.length-1);z++){
+       const finish=tokens[z].replace('着','');
+       if(finishOK(finish)){got.push({course:tokens[k],st:tokens[s],finish,raw:`${tokens[k]} ${tokens[s]} ${finish}`});k=z;break}
+      }
+      if(got.length&&got[got.length-1].st===tokens[s])break;
      }
-     if(got.length>runs.length)runs=got;
     }
+    if(got.length>runs.length)runs=got;
    }
   }
   rows.push({reg:racer.reg,name:racer.name,runs:runs.slice(0,14),values:runs.slice(0,14).map(x=>x.raw)});
  }
- return {rows,count:rows.filter(x=>x.runs.length).length,parser:'v5.14-flex-series'};
+ return {rows,count:rows.filter(x=>x.runs.length).length,parser:'v5.15-bounded-flex-series'};
 }
 function parseOmuraSeries(html,racers){
  const $=cheerio.load(html), runsBy=Array.from({length:6},()=>[]), avgST=Array(6).fill('');
