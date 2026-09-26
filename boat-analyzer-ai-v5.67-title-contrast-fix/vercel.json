@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/boatrace?kind=seriesaudit&rno=1",
+      "path": "/api/boatrace?kind=fullaudit&rno=1",
       "schedule": "0 */3 * * *"
     }
   ]
