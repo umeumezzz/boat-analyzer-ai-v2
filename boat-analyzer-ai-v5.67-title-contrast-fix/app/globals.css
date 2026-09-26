@@ -127,3 +127,6 @@ html,body{background:#03152d;}
 
 /* Public v1.0 footer */
 .publicFooter{max-width:1180px;margin:28px auto 12px;padding:22px 20px;border-top:1px solid rgba(255,255,255,.16);text-align:center;color:rgba(255,255,255,.72);font-size:12px;line-height:1.7}.publicFooter b{display:block;color:#fff;letter-spacing:.08em;margin-bottom:7px}.publicFooter p{margin:4px auto;max-width:880px}.publicFooter small{display:block;margin-top:8px;color:rgba(255,255,255,.58)}
+
+/* Public data-state messaging */
+.publicDataAlert{margin:10px 0 16px;padding:12px 14px;border:1px solid rgba(255,190,70,.5);border-radius:12px;background:rgba(255,190,70,.08);display:flex;gap:5px;flex-direction:column}.publicDataAlert b{font-size:13px}.publicDataAlert span{font-size:13px}.publicDataAlert small{opacity:.7;line-height:1.5}
