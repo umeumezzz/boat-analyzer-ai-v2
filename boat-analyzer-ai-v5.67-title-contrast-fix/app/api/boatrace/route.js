@@ -1137,12 +1137,24 @@ export async function GET(req){
    return Response.json({ok:true,updatedAt:new Date().toISOString(),odds,count:odds.length},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
   }
   if(kind==='fullaudit'){
-   // Scheduled health audit: one representative race per venue, all core data families.
-   // Missing pre-race data is classified separately from parser/transport failures.
-   const raceNo=Number(rno||1),venues=Object.keys(ORIGINAL_SUPPORTED);
+   // Scheduled health audit: select each venue's current/next race from the official
+   // deadline schedule instead of auditing fixed R1 all day.
+   const fallbackRace=Number(rno||1),venues=Object.keys(ORIGINAL_SUPPORTED);
+   const nowJst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
    const rows=await Promise.all(venues.map(async code=>{
     const venue=ORIGINAL_SUPPORTED[code]?.name||code;
     try{
+     let raceNo=fallbackRace,scheduleStatus='fallback';
+     try{
+      const indexHtml=await grab(`raceindex?hd=${hd}&jcd=${code}`,60),times=parseSchedule(indexHtml);
+      if(times.length===12){
+       scheduleStatus='official';
+       const nowMin=nowJst.getHours()*60+nowJst.getMinutes();
+       const mins=times.map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m});
+       const next=mins.findIndex(x=>x>nowMin);
+       raceNo=next>=0?next+1:12;
+      }
+     }catch{}
      const [rr,bb,or,od,res]=await Promise.allSettled([
       grab(`racelist?hd=${hd}&jcd=${code}&rno=${raceNo}`,60),
       grab(`beforeinfo?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
@@ -1150,9 +1162,9 @@ export async function GET(req){
       grab(`odds3t?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
       grab(`raceresult?hd=${hd}&jcd=${code}&rno=${raceNo}`,20)
      ]);
-     if(rr.status!=='fulfilled')return {jcd:code,venue,hosting:false,status:'racelist-fetch-error',needsReview:true};
+     if(rr.status!=='fulfilled')return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'racelist-fetch-error',needsReview:true};
      const race=parseRace(rr.value).racers;
-     if(race.length!==6)return {jcd:code,venue,hosting:false,status:'not-hosting',needsReview:false};
+     if(race.length!==6)return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'not-hosting',needsReview:false};
      const series=parseSeries(rr.value,race);
      const before=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],completeTimes:0,completeST:0};
      const original=or.status==='fulfilled'?or.value:{available:false,rows:[],error:'fetch-error'};
@@ -1167,7 +1179,7 @@ export async function GET(req){
      if(od.status==='rejected')issues.push('odds-fetch');
      if(res.status==='rejected')issues.push('result-fetch');
      if(result.available&&(!result.trifecta||!result.payout||result.finish.length<3))issues.push('result-parse');
-     return {jcd:code,venue,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
+     return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
       race:{racers:race.length},series:{parsed:series.count||0,runCount:series.runCount||0,status:series.status},
       before:{available:!!before.available,exhibitionTimes:before.completeTimes||0,startTiming:before.completeST||0},
       original:{available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null},
@@ -1177,9 +1189,9 @@ export async function GET(req){
    }));
    const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
    const summary={venues:24,hosting:hosting.length,healthy:hosting.filter(x=>x.status==='ok').length,needsReview:review.length};
-   if(review.length)console.warn('[full-audit]',JSON.stringify({hd,rno:raceNo,summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,status:x.status,issues:x.issues||[]}))}));
-   else console.log('[full-audit]',JSON.stringify({hd,rno:raceNo,summary}));
-   return Response.json({ok:true,hd,rno:raceNo,summary,review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}})
+   if(review.length)console.warn('[full-audit]',JSON.stringify({hd,mode:'current-next',summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,rno:x.rno,status:x.status,issues:x.issues||[]}))}));
+   else console.log('[full-audit]',JSON.stringify({hd,mode:'current-next',summary}));
+   return Response.json({ok:true,hd,mode:'current-next',fallbackRace,summary,review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}})
   }
   if(kind==='seriesaudit'){
    // One request audits all 24 venues for current-series parser completeness.
