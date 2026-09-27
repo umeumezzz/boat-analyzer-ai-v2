@@ -31,8 +31,10 @@ function parseRace(html){
  });
  return {racers:racers.slice(0,6)}
 }
-const ascii=s=>clean(s).replace(/[０-９]/g,ch=>String(ch.charCodeAt(0)-0xFEE0)).replace(/[．。]/g,'.');
+const ascii=s=>clean(s).replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/[．。]/g,'.');
 const stOK=s=>/^(?:F|L)?\.?\d{2}$/.test(ascii(s));
+// Current-series ST is printed as .13 (or 0.13). Bare two-digit race numbers are never ST.
+const seriesStOK=s=>/^(?:F|L)?(?:0)?\.\d{2}$/.test(ascii(s));
 // Exhibition times can legitimately cross 7 seconds. Keep the format strict, but validate by a plausible numeric range instead of hard-coding 6.xx.
 const exTimeOK=s=>/^\d\.\d{2}$/.test(ascii(s))&&Number(ascii(s))>=6&&Number(ascii(s))<9;
 const courseOK=s=>/^[1-6]$/.test(ascii(s));
@@ -49,14 +51,14 @@ function parseSeries(html,racers){
   let best=[];
   for(let si=0;si<rowArrays.length;si++){
    const sr=rowArrays[si];
-   if(sr.filter(stOK).length<1)continue;
+   if(sr.filter(seriesStOK).length<1)continue;
    for(let ci=Math.max(0,si-2);ci<si;ci++)for(let fi=si+1;fi<=Math.min(rowArrays.length-1,si+2);fi++){
     let cr=rowArrays[ci],fr=rowArrays[fi];
     const n=Math.min(cr.length,sr.length,fr.length); if(!n)continue;
     const a=cr.slice(-n),b=sr.slice(-n),c=fr.slice(-n),got=[];
     for(let j=0;j<n;j++){
      const course=ascii(a[j]),st=ascii(b[j]),finish=ascii(c[j]).replace('着','');
-     if(courseOK(course)&&stOK(st)&&finishOK(finish))got.push({course,st,finish,raw:`${course} ${st} ${finish}`});
+     if(courseOK(course)&&seriesStOK(st)&&finishOK(finish))got.push({course,st,finish,raw:`${course} ${st} ${finish}`});
     }
     if(got.length>best.length)best=got;
    }
@@ -105,7 +107,7 @@ function parseSeries(html,racers){
      if(!courseOK(tokens[k]))continue;
      // Allow one harmless token (e.g. race number/day marker) between the three values.
      for(let s=k+1;s<=Math.min(k+2,tokens.length-1);s++){
-      if(!stOK(tokens[s]))continue;
+      if(!seriesStOK(tokens[s]))continue;
       for(let z=s+1;z<=Math.min(s+2,tokens.length-1);z++){
        const finish=tokens[z].replace('着','');
        if(finishOK(finish)){got.push({course:tokens[k],st:tokens[s],finish,raw:`${tokens[k]} ${tokens[s]} ${finish}`});k=z;break}
