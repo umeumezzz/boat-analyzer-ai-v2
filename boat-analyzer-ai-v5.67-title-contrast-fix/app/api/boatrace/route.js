@@ -327,40 +327,26 @@ function parseMarugameOriginal(html){
  return strictVenueRows(html,{source:'BOAT RACEまるがめ公式・オリジナル展示',provider:'marugame-official-strict-v2',straight:true});
 }
 function parseTokuyamaOriginal(html){
-  // 徳山公式の計測ページは各艇ブロック内に
-  // 「展示 → 一周 → まわり足」が並ぶ。登録番号を艇ブロック境界として扱い、
-  // ページ全体を横断する正規表現で艇を取り違えないようにする。
-  const $=cheerio.load(html);
-  const text=ascii($('body').text()).replace(/\s+/g,' ').trim();
-  const marks=[...text.matchAll(/(?:^|\s)(\d{4})(?=\s)/g)];
-  const rows=[];
-
-  for(let i=0;i<marks.length&&rows.length<6;i++){
-    const from=marks[i].index;
-    const to=i+1<marks.length?marks[i+1].index:text.length;
-    const block=text.slice(from,to);
-    const tm=block.match(/展示[：:]\s*(\d+(?:\.\d+)?)/);
-    const lm=block.match(/一周[：:]\s*(\d+(?:\.\d+)?)/);
-    const rm=block.match(/まわり足[：:]\s*(\d+(?:\.\d+)?)/);
-    if(!tm||!lm||!rm)continue;
+  // 徳山公式の艇別ブロックをDOM単位で読む。艇番号が明示されないページ構造では
+  // 登録番号ブロックの出現順を艇番へ推測変換しない。誤対応をAIへ渡すより未取得を優先する。
+  const $=cheerio.load(html),by=new Map();
+  $('tr,li,section,article,div').each((_,el)=>{
+    const raw=ascii($(el).text()).replace(/\s+/g,' ').trim();
+    if(!/展示[：:]/.test(raw)||!/一周[：:]/.test(raw)||!/まわり足[：:]/.test(raw))return;
+    const laneMatch=raw.match(/(?:艇番|艇|枠番|枠)\s*[：:]?\s*([1-6])(?:号艇)?/);
+    if(!laneMatch)return;
+    const lane=Number(laneMatch[1]);if(by.has(lane))return;
+    const tm=raw.match(/展示[：:]\s*(\d+(?:\.\d+)?)/);
+    const lm=raw.match(/一周[：:]\s*(\d+(?:\.\d+)?)/);
+    const rm=raw.match(/まわり足[：:]\s*(\d+(?:\.\d+)?)/);
+    if(!tm||!lm||!rm)return;
     const time=Number(tm[1]),lap=Number(lm[1]),turn=Number(rm[1]);
-    if(!(time>=6&&time<9)||!(lap>=30&&lap<45)||!(turn>=9&&turn<15))continue;
-    rows.push({lane:rows.length+1,time:time.toFixed(2),lap:lap.toFixed(2),turn:turn.toFixed(2),straight:''});
-  }
-
-  const complete=rows.length===6;
-  return {
-    available:complete,
-    rows:complete?rows:[1,2,3,4,5,6].map(lane=>({lane})),
-    completeTimes:complete?6:0,
-    originalComplete:complete?6:0,
-    source:'BOAT RACE徳山公式・オリジナル展示',
-    lapLabel:'1周',
-    provider:'tokuyama-official-v3',
-    validation:complete?'strict-block-6of6':'rejected-partial'
-  };
+    if(!(time>=6&&time<9)||!(lap>=30&&lap<45)||!(turn>=9&&turn<15))return;
+    by.set(lane,{lane,time:time.toFixed(2),lap:lap.toFixed(2),turn:turn.toFixed(2),straight:''});
+  });
+  const rows=[1,2,3,4,5,6].map(lane=>by.get(lane)||{lane}),complete=rows.filter(r=>r.time&&r.lap&&r.turn).length;
+  return {available:complete===6,rows:complete===6?rows:[1,2,3,4,5,6].map(lane=>({lane})),completeTimes:complete===6?6:0,originalComplete:complete,source:'BOAT RACE徳山公式・オリジナル展示',lapLabel:'1周',provider:'tokuyama-official-v4',validation:complete===6?'explicit-lane-6of6':'rejected-unmapped-or-partial'};
 }
-
 function parseTokonameOriginal(html){
   // 常滑公式の「オリジナル展示データ」表を列名で厳密に取得する。
   // 選手情報側の数値（勝率・年齢等）を誤って拾わないよう、
