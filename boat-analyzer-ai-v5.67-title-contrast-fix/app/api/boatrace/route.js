@@ -649,7 +649,17 @@ function parseBoatcastOriginal(text,jcd){
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
  const inRange=(v,min,max)=>v==null||v===''||(Number.isFinite(Number(v))&&Number(v)>=min&&Number(v)<max);
  const validRow=r=>inRange(r.time,6,9)&&inRange(r.lap,30,45)&&inRange(r.turn,4,15)&&inRange(r.straight,4,9);
- const complete=rows.filter(r=>r.lap||r.turn||r.straight).length===6;
+ // BOATCAST feeds differ by venue: some publish only exhibition time while
+ // others add lap/turn/straight. Availability must therefore be based on the
+ // measurements the feed actually declares, not on optional original metrics.
+ const knownLabels=labels.filter(l=>l.includes('展示タイム')||l==='展示'||l.includes('一周')||l.includes('半周ラップ')||l.includes('まわり足')||l.includes('回り足')||l.includes('直線'));
+ const complete=knownLabels.length>0&&rows.every(r=>knownLabels.every(l=>{
+  if(l.includes('展示タイム')||l==='展示')return String(r.time||'').trim()!=='';
+  if(l.includes('一周')||l.includes('半周ラップ'))return String(r.lap||'').trim()!=='';
+  if(l.includes('まわり足')||l.includes('回り足'))return String(r.turn||'').trim()!=='';
+  if(l.includes('直線'))return String(r.straight||'').trim()!=='';
+  return true;
+ }));
  const valid=complete&&rows.every(validRow);
  const venue=String(jcd).padStart(2,'0')==='06'?'浜名湖':String(jcd).padStart(2,'0');
  return {available:valid,rows:valid?rows:[1,2,3,4,5,6].map(l=>({lane:l})),status,measureCount:count,measureLabels:labels,source:`BOATCAST公式・${venue}オリジナル展示`,provider:'boatcast',validation:valid?'range-checked-6of6':complete?'rejected-range':'rejected-partial'};
