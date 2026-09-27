@@ -140,3 +140,6 @@ html,body{background:#03152d;}
 
 /* Race lifecycle states */
 .racePhase{margin:8px 0 12px;padding:10px 13px;border-radius:11px;display:flex;flex-direction:column;gap:3px;font-size:12px}.racePhase b{font-size:13px}.racePhase.closed{border:1px solid rgba(245,170,55,.42);background:rgba(245,170,55,.09);color:#7a5315}.racePhase.result{border:1px solid rgba(55,155,225,.38);background:rgba(55,155,225,.08);color:#164d73}.racePhase span{line-height:1.5}
+
+/* Live data freshness guard */
+.freshnessAlert{margin:8px 0 12px;padding:10px 13px;border:1px solid rgba(225,105,70,.42);border-radius:11px;background:rgba(225,105,70,.08);display:flex;flex-direction:column;gap:3px;color:#813c2b}.freshnessAlert b{font-size:13px}.freshnessAlert span{font-size:12px;line-height:1.5}
