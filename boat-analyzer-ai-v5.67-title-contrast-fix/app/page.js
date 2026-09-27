@@ -114,7 +114,7 @@ export default function Page(){
   (async()=>{await Promise.all(priority.map(warmOne));for(let i=0;i<rest.length&&!dead;i+=4)await Promise.all(rest.slice(i,i+4).map(warmOne));})();
   return()=>{dead=true}
  },[sel,hd,Object.values(venueStatus).filter(x=>x==='live').length,Object.keys(schedules).length,dailyPicks?.[0]?.venue?.[1],dailyPicks?.[0]?.rno]);
- useEffect(()=>{if(!sel)return;let stopped=false,coreTimer,oddsTimer;
+ useEffect(()=>{if(!sel)return;let stopped=false,coreTimer,oddsTimer,resultTimer;
   const key=`${hd}-${sel[1]}-${race}`,cached=readCache(key);
   if(cached){setCore(cached.core||null);setOdds(cached.odds||[]);setOddsAt(cached.oddsAt||null);setDiag(d=>({...d,core:cached.core?.race?.racers?.length===6?0:d.core,odds:cached?.odds?.length?0:d.odds}))}
   else {setCore(null);setOdds([]);setOddsAt(null)}
@@ -133,10 +133,13 @@ export default function Page(){
   const loadCourseStats=async()=>{if(!['06','23','24'].includes(String(sel?.[1])))return setCourseStats(null);try{const r=await fetch(`/api/boatrace?hd=${hd}&jcd=${sel[1]}&rno=${race}&kind=course`),j=await r.json();if(!stopped&&j.ok)setCourseStats(j.course||null)}catch{}};
   const loadResult=async()=>{try{const times=schedules[sel?.[1]];if(!times)return setResult(null);if(!isTest&&ms(times[race-1],new Date())>Date.now())return setResult(null);const r=await fetch(`/api/boatrace?hd=${hd}&jcd=${sel[1]}&rno=${race}&kind=result`,{cache:'no-store'}),j=await r.json();if(j.ok&&j.result?.available)setResult(j.result);else setResult(null)}catch{setResult(null)}};
   const prefetchRace=async n=>{if(n<1||n>12)return;const k=`${hd}-${sel[1]}-${n}`;if(prefetchingRef.current.has(k))return;prefetchingRef.current.add(k);try{const [cr,or]=await Promise.allSettled([fetch(`/api/boatrace?hd=${hd}&jcd=${sel[1]}&rno=${n}&kind=base`),fetch(`/api/boatrace?hd=${hd}&jcd=${sel[1]}&rno=${n}&kind=odds`)]);let x=readCache(k)||{};if(cr.status==='fulfilled'){const j=await cr.value.json();if(j.ok)x={...x,core:j}}if(or.status==='fulfilled'){const j=await or.value.json();if(j.ok)x={...x,odds:j.odds,oddsAt:j.updatedAt}}saveCache(k,x)}catch(e){}finally{prefetchingRef.current.delete(k)}};
-  const start=()=>{clearInterval(coreTimer);clearInterval(oddsTimer);const hit=readCache(key);if(hit?.core?.race?.racers?.length===6||hit?.odds?.length){setTimeout(()=>{if(!stopped&&!document.hidden){loadCore();loadOdds()}},1200)}else{loadCore();loadOdds()}loadResult();loadCourseStats();loadSeries();setTimeout(()=>{if(!stopped&&!document.hidden){prefetchRace(race+1);prefetchRace(race-1)}},2200);coreTimer=setInterval(loadCore,60000);oddsTimer=setInterval(loadOdds,30000)};
-  const vis=()=>{if(document.hidden){coreRef.current?.abort();oddsRef.current?.abort();seriesRef.current?.abort();clearInterval(coreTimer);clearInterval(oddsTimer)}else start()};
+  const start=()=>{clearInterval(coreTimer);clearInterval(oddsTimer);clearInterval(resultTimer);const hit=readCache(key);if(hit?.core?.race?.racers?.length===6||hit?.odds?.length){setTimeout(()=>{if(!stopped&&!document.hidden){loadCore();loadOdds()}},1200)}else{loadCore();loadOdds()}loadResult();loadCourseStats();loadSeries();setTimeout(()=>{if(!stopped&&!document.hidden){prefetchRace(race+1);prefetchRace(race-1)}},2200);coreTimer=setInterval(loadCore,60000);oddsTimer=setInterval(loadOdds,30000);
+   // Once the deadline passes, poll the official result until it is published.
+   // loadResult itself exits immediately before deadline, so this stays cheap for open races.
+   resultTimer=setInterval(()=>{if(!document.hidden)loadResult()},30000)};
+  const vis=()=>{if(document.hidden){coreRef.current?.abort();oddsRef.current?.abort();seriesRef.current?.abort();clearInterval(coreTimer);clearInterval(oddsTimer);clearInterval(resultTimer)}else start()};
   start();document.addEventListener('visibilitychange',vis);
-  return()=>{stopped=true;clearInterval(coreTimer);clearInterval(oddsTimer);coreRef.current?.abort();oddsRef.current?.abort();seriesRef.current?.abort();document.removeEventListener('visibilitychange',vis)};
+  return()=>{stopped=true;clearInterval(coreTimer);clearInterval(oddsTimer);clearInterval(resultTimer);coreRef.current?.abort();oddsRef.current?.abort();seriesRef.current?.abort();document.removeEventListener('visibilitychange',vis)};
  },[sel?.[1],race,hd]);
  // v5.47: venue race-list result summary. Works for all 24 venues via BOAT RACE official result endpoint.
  useEffect(()=>{if(!sel)return;let dead=false;setRaceResults({});const times=schedules[sel[1]]||[];
