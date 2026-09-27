@@ -92,12 +92,28 @@ export default function Page(){
  // v5.1: rank the nearest upcoming race from each live venue. This runs after the top page is usable.
  useEffect(()=>{if(sel||isTest){setDailyPicks([]);setPicksLoading(false);return}const known=Object.values(venueStatus).filter(x=>x==='live'||x==='off').length;if(known<24)return;const live=venues.filter(v=>venueStatus[v[1]]==='live'&&schedules[v[1]]?.length===12);if(!live.length)return;let dead=false;const dailyKey=`boat:daily:${hd}`;
   // v5.4: stale-while-refresh. Show the previous valid TOP5 instantly, then refresh in parallel.
-  try{const saved=JSON.parse(localStorage.getItem(dailyKey)||'null');if(saved?.items?.length)setDailyPicks(saved.items)}catch{}setPicksLoading(true);
-  const scoreRace=async(v)=>{const rno=chooseNearest(schedules[v[1]],now);const time=schedules[v[1]][rno-1];if(ms(time,now)<=now.getTime())return null;try{const r=await fetch(`/api/boatrace?hd=${hd}&jcd=${v[1]}&rno=${rno}&kind=core`),j=await r.json();if(!j.ok||j.race?.racers?.length!==6)return null;const a=model(j.race.racers,j.before,null);if(!a)return null;const top=a.top?.[0]?.combo||'';return {venue:v,rno,time,heat:a.heat,marks:`◎${a.rank[0]?.n} ○${a.rank[1]?.n}`,combo:top,exReady:a.exReady,meeting:meetingMeta[v[1]]||{},reason:a.exReady?`展示反映済。${a.scenario}`:`事前データで${a.rank[0]?.n}号艇を軸評価。${a.scenario}`}}catch{return null}};
+  try{const saved=JSON.parse(localStorage.getItem(dailyKey)||'null');if(Date.now()-saved?.at<90000&&saved?.items?.length)setDailyPicks(saved.items.filter(x=>x.verified&&ms(x.time,now)>now.getTime()))}catch{}setPicksLoading(true);
+  const scoreRace=async(v)=>{
+   const rno=chooseNearest(schedules[v[1]],now),time=schedules[v[1]][rno-1];
+   if(ms(time,now)<=now.getTime())return null;
+   try{
+    const url=`/api/boatrace?hd=${hd}&jcd=${v[1]}&rno=${rno}&kind=`;
+    const [cr,sr,or]=await Promise.all([fetch(url+'core'),fetch(url+'series'),fetch(url+'odds')]);
+    const [j,s,o]=await Promise.all([cr.json(),sr.json(),or.json()]);
+    const rows=j.before?.rows||[],complete=rows.length===6&&[1,2,3,4,5,6].every(lane=>{const row=rows.find(x=>x.lane===lane);return row&&String(row.time??'').trim()!==''&&String(row.st??'').trim()!==''});
+    const seriesReady=s.series?.status==='complete'||(s.series?.status==='not-published'&&s.series?.firstDay===true);
+    const fresh=t=>t&&Number.isFinite(Date.parse(t))&&Math.abs(Date.now()-Date.parse(t))<90000;
+    if(!j.ok||j.race?.racers?.length!==6||!complete||!seriesReady||o.odds?.length!==120||!fresh(j.updatedAt)||!fresh(o.updatedAt))return null;
+    const a=model(j.race.racers,j.before,null,s.series);
+    if(!a)return null;
+    const combo=a.top?.[0]?.combo||'',odds=(o.odds||[]).find(x=>x.combo===combo)?.odds||null;
+    return {venue:v,rno,time,heat:a.heat,marks:`◎${a.rank[0]?.n} ○${a.rank[1]?.n}`,combo,odds,exReady:true,verified:true,meeting:meetingMeta[v[1]]||{},reason:`展示反映済。${a.scenario}`};
+   }catch{return null}
+  };
   (async()=>{const candidates=live.map(v=>({v,rno:chooseNearest(schedules[v[1]],now),time:schedules[v[1]][chooseNearest(schedules[v[1]],now)-1]})).filter(x=>x.time&&ms(x.time,now)>now.getTime()).sort((a,b)=>ms(a.time,now)-ms(b.time,now)).slice(0,8).map(x=>x.v);const out=(await Promise.all(candidates.map(scoreRace))).filter(Boolean);if(dead)return;out.sort((a,b)=>b.heat-a.heat||ms(a.time,now)-ms(b.time,now));let top=out.slice(0,5);
    // Paint rankings immediately; odds are enrichment and must never block TOP5 visibility.
    if(!dead){setDailyPicks(top);setPicksLoading(false)}
-   top=await Promise.all(top.map(async x=>{try{const r=await fetch(`/api/boatrace?hd=${hd}&jcd=${x.venue[1]}&rno=${x.rno}&kind=odds`),j=await r.json(),m=Object.fromEntries((j.odds||[]).map(o=>[o.combo,o.odds]));return {...x,odds:m[x.combo]||null}}catch{return x}}));if(dead)return;setDailyPicks(top);try{localStorage.setItem(dailyKey,JSON.stringify({at:Date.now(),items:top}))}catch{}})();return()=>{dead=true}},[hd,Object.keys(schedules).length,Object.values(venueStatus).filter(x=>x==='live').length,sel]);
+   if(dead)return;setDailyPicks(top);try{localStorage.setItem(dailyKey,JSON.stringify({at:Date.now(),items:top}))}catch{}})();return()=>{dead=true}},[hd,Object.keys(schedules).length,Object.values(venueStatus).filter(x=>x==='live').length,sel]);
  const readCache=key=>{let m=cacheRef.current.get(key);if(m)return m;try{let v=JSON.parse(sessionStorage.getItem('boat:'+key)||'null');if(v){cacheRef.current.set(key,v);return v}}catch{}return null};
  const saveCache=(key,val)=>{cacheRef.current.set(key,val);try{sessionStorage.setItem('boat:'+key,JSON.stringify(val))}catch{}};
  // v5.58 DEADLINE+ODDS: priority pre-warm. First wave = 3 nearest deadlines + #1 Daily Oracle.
