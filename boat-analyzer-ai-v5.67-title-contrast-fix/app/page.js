@@ -119,17 +119,16 @@ export default function Page(){
  // v5.58 DEADLINE+ODDS: priority pre-warm. First wave = 3 nearest deadlines + #1 Daily Oracle.
  // If the oracle overlaps a deadline pick, fill the free slot with the next-nearest race.
  // Remaining live venues are warmed only after this priority wave finishes.
- useEffect(()=>{if(sel||isTest)return;const live=venues.filter(v=>venueStatus[v[1]]==='live'&&schedules[v[1]]?.length===12);if(!live.length)return;let dead=false;
+ useEffect(()=>{if(sel||isTest||Object.values(venueStatus).filter(x=>x==='live'||x==='off').length<24)return;const live=venues.filter(v=>venueStatus[v[1]]==='live'&&schedules[v[1]]?.length===12);if(!live.length)return;let dead=false;
   const nearest=[...live].map(v=>({v,n:chooseNearest(schedules[v[1]],now),time:schedules[v[1]][chooseNearest(schedules[v[1]],now)-1]})).filter(x=>x.time&&ms(x.time,now)>now.getTime()).sort((a,b)=>ms(a.time,now)-ms(b.time,now));
   const oracle=dailyPicks?.[0]?.venue&&dailyPicks?.[0]?.rno?{v:dailyPicks[0].venue,n:dailyPicks[0].rno,time:dailyPicks[0].time,oracle:true}:null;
   const priority=[];const add=x=>{if(x&&!priority.some(y=>y.v[1]===x.v[1]&&y.n===x.n))priority.push(x)};nearest.slice(0,3).forEach(add);add(oracle);for(const x of nearest){if(priority.length>=4)break;add(x)}
-  const rest=nearest.filter(x=>!priority.some(y=>y.v[1]===x.v[1]&&y.n===x.n));
   const warmOne=async x=>{if(dead||document.hidden)return;const v=x.v,n=x.n,k=`${hd}-${v[1]}-${n}`,old=readCache(k)||{};if(old.core?.race?.racers?.length===6&&old.odds?.length===120)return;try{
    const [br,or]=await Promise.all([fetch(`/api/boatrace?hd=${hd}&jcd=${v[1]}&rno=${n}&kind=base`),fetch(`/api/boatrace?hd=${hd}&jcd=${v[1]}&rno=${n}&kind=odds`)]);
    const [bj,oj]=await Promise.all([br.json(),or.json()]);if(dead)return;let z=readCache(k)||{};if(bj.ok)z={...z,core:bj};if(oj.ok)z={...z,odds:oj.odds||[],oddsAt:oj.updatedAt};saveCache(k,{...z,warmedAt:Date.now(),warmPriority:x.oracle?'oracle':'deadline'});
-   fetch(`/api/boatrace?hd=${hd}&jcd=${v[1]}&rno=${n}&kind=before`).catch(()=>{});
   }catch{}};
-  (async()=>{await Promise.all(priority.map(warmOne));for(let i=0;i<rest.length&&!dead;i+=4)await Promise.all(rest.slice(i,i+4).map(warmOne));})();
+  // Keep the nearest races responsive without fetching every other venue on the home page.
+  Promise.all(priority.map(warmOne));
   return()=>{dead=true}
  },[sel,hd,Object.values(venueStatus).filter(x=>x==='live').length,Object.keys(schedules).length,dailyPicks?.[0]?.venue?.[1],dailyPicks?.[0]?.rno]);
  useEffect(()=>{if(!sel)return;let stopped=false,coreTimer,oddsTimer,resultTimer;
