@@ -1065,7 +1065,8 @@ function parseOfficialSeason(html){
 export async function GET(req){
  const q=new URL(req.url).searchParams;
  const jstDate=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()).replace(/-/g,'');
- const hd=q.get('hd')||jstDate,jcd=q.get('jcd'),rno=q.get('rno'),kind=q.get('kind')||'core';
+ const kind=q.get('kind')||'core';
+ const hd=q.get('hd')||jstDate,jcd=q.get('jcd')||(kind==='fullaudit'?'01':null),rno=q.get('rno')||(kind==='fullaudit'?'1':null);
  if(kind==='racersearch'){
   const term=clean(q.get('q')||''); if(!term)return Response.json({ok:true,rows:[]});
   try{const isReg=/^\d{4}$/.test(term),url=isReg?`https://www.boatrace.jp/owpc/pc/data/racersearch/result?prevpgid=TDAT320&toban_left=${term}`:`https://www.boatrace.jp/owpc/pc/data/racersearch/result?prevpgid=TDAT320&name=${encodeURIComponent(term)}`;const html=await grabUrl(url,300);return Response.json({ok:true,rows:parseRacerSearch(html)})}catch{return Response.json({ok:false,rows:[]})}
