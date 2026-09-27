@@ -33,6 +33,8 @@ function parseRace(html){
 }
 const ascii=s=>clean(s).replace(/[０-９]/g,ch=>String(ch.charCodeAt(0)-0xFEE0)).replace(/[．。]/g,'.');
 const stOK=s=>/^(?:F|L)?\.?\d{2}$/.test(ascii(s));
+// Exhibition times can legitimately cross 7 seconds. Keep the format strict, but validate by a plausible numeric range instead of hard-coding 6.xx.
+const exTimeOK=s=>/^\d\.\d{2}$/.test(ascii(s))&&Number(ascii(s))>=6&&Number(ascii(s))<9;
 const courseOK=s=>/^[1-6]$/.test(ascii(s));
 const finishOK=s=>/^(?:[1-6]|F|L|K|S|転|落|妨|失)(?:着)?$/.test(ascii(s));
 function parseSeries(html,racers){
@@ -168,16 +170,16 @@ function parseOmuraSeries(html,racers){
 }
 
 function parseBefore(html){const $=cheerio.load(html),body=clean($('body').text()),byLane=new Map();
- const put=(lane,st,time)=>{lane=Number(lane);if(!(lane>=1&&lane<=6))return;const old=byLane.get(lane)||{lane};st=ascii(st||'');time=ascii(time||'');if(stOK(st)&&!old.st)old.st=st;if(/^6\.\d{2}$/.test(time)&&!old.time)old.time=time;byLane.set(lane,old)};
+ const put=(lane,st,time)=>{lane=Number(lane);if(!(lane>=1&&lane<=6))return;const old=byLane.get(lane)||{lane};st=ascii(st||'');time=ascii(time||'');if(stOK(st)&&!old.st)old.st=st;if(exTimeOK(time)&&!old.time)old.time=time;byLane.set(lane,old)};
  const vals=el=>$(el).find('th,td,span,div').map((_,x)=>ascii($(x).text())).get().filter(Boolean);
  // Official start-exhibition blocks. Some layouts place ST and exhibition time in sibling/descendant nodes.
- $('.table1_boatImage1').each((_,el)=>{const a=vals(el),lane=Number(ascii($(el).find('.table1_boatImage1Number').first().text()))||a.map(Number).find(x=>x>=1&&x<=6),st=ascii($(el).find('.table1_boatImage1Time').first().text())||a.find(stOK),time=a.find(x=>/^6\.\d{2}$/.test(x));if(lane)put(lane,st,time)});
+ $('.table1_boatImage1').each((_,el)=>{const a=vals(el),lane=Number(ascii($(el).find('.table1_boatImage1Number').first().text()))||a.map(Number).find(x=>x>=1&&x<=6),st=ascii($(el).find('.table1_boatImage1Time').first().text())||a.find(stOK),time=a.find(x=>exTimeOK(x));if(lane)put(lane,st,time)});
  // Scope parsing to tables/blocks explicitly containing 展示タイム; pair each data row with its lane.
- $('table,section,div').filter((_,el)=>/展示タイム/.test(ascii($(el).text()))).each((_,box)=>{$(box).find('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);if(!c.length)return;const lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>/^6\.\d{2}$/.test(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)})});
+ $('table,section,div').filter((_,el)=>/展示タイム/.test(ascii($(el).text()))).each((_,box)=>{$(box).find('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);if(!c.length)return;const lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>exTimeOK(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)})});
  // Official compact exhibition rows.
- $('.is-fs12').each((_,el)=>{const c=$(el).children('td').map((_,td)=>ascii($(td).text())).get().filter(Boolean),lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>/^6\.\d{2}$/.test(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)});
+ $('.is-fs12').each((_,el)=>{const c=$(el).children('td').map((_,td)=>ascii($(td).text())).get().filter(Boolean),lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>exTimeOK(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)});
  // If all six exhibition times are present as a contiguous official text block, map in lane order.
- if([...byLane.values()].filter(x=>x.time).length<6){const txt=ascii($('body').text()),pos=txt.indexOf('展示タイム');if(pos>=0){const chunk=txt.slice(pos,pos+1800),ts=[...chunk.matchAll(/(?:^|\s)(6\.\d{2})(?=\s|$)/g)].map(m=>m[1]);const uniq=ts.slice(0,6);if(uniq.length===6)uniq.forEach((t,i)=>put(i+1,'',t))}}
+ if([...byLane.values()].filter(x=>x.time).length<6){const txt=ascii($('body').text()),pos=txt.indexOf('展示タイム');if(pos>=0){const chunk=txt.slice(pos,pos+1800),ts=[...chunk.matchAll(/(?:^|\s)([6-8]\.\d{2})(?=\s|$)/g)].map(m=>m[1]);const uniq=ts.slice(0,6);if(uniq.length===6)uniq.forEach((t,i)=>put(i+1,'',t))}}
  const rows=[1,2,3,4,5,6].map(lane=>byLane.get(lane)||{lane}),weather={};for(const k of ['気温','水温','風速','波高']){const m=body.match(new RegExp(k+'\\s*([0-9.]+\\s*(?:℃|m|cm)?)'));if(m)weather[k]=m[1]}const wind=(body.match(/風向\s*([^\s]{1,8})/)||[])[1];if(wind)weather['風向']=wind;return {available:rows.some(r=>r.st||r.time),rows,weather,completeTimes:rows.filter(r=>r.time).length,completeST:rows.filter(r=>r.st).length}}
 
 
@@ -223,7 +225,7 @@ function parseOriginalExhibition(html){
   // Official venue pages use: lane/name/ST/exhibition/lap/turn/straight ...
   const nums=c.map(x=>ascii(x));
   const st=nums.find(stOK)||'';
-  const ex=nums.find(x=>/^6\.\d{2}$/.test(x))||'';
+  const ex=nums.find(x=>exTimeOK(x))||'';
   const lap=nums.find(x=>/^(?:3[5-9]|4[0-2])\.\d{2}$/.test(x))||'';
   const afterEx=ex?nums.slice(nums.indexOf(ex)+1):nums;
   const small=afterEx.filter(x=>/^[4-8]\.\d{2}$/.test(x));
@@ -369,7 +371,7 @@ function parseTokonameOriginal(html){
   });
 
   const complete=rows.filter(r=>
-    /^6\.\d{2}$/.test(r.time||'') &&
+    exTimeOK(r.time||'') &&
     /^(?:3[0-9]|4[0-4])\.\d{2}$/.test(r.lap||'') &&
     /^[4-8]\.\d{2}$/.test(r.turn||'') &&
     /^[5-8]\.\d{2}$/.test(r.straight||'')
@@ -396,7 +398,7 @@ function strictOfficialFourMetricVenue(html,{source,provider}={}){
     return {lane,time:r.time||'',lap:r.lap||'',turn:r.turn||'',straight:r.straight||''};
   });
   const valid=r=>
-    /^6\.\d{2}$/.test(r.time||'') &&
+    exTimeOK(r.time||'') &&
     /^(?:3[0-9]|4[0-4])\.\d{2}$/.test(r.lap||'') &&
     /^[4-8]\.\d{2}$/.test(r.turn||'') &&
     /^[5-8]\.\d{2}$/.test(r.straight||'');
@@ -445,7 +447,7 @@ function parseOmuraOriginal(html){
   });
  });
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
- const valid=r=>/^6\.\d{2}$/.test(r.time||'')&&Number(r.lap)>=30&&Number(r.lap)<45&&Number(r.turn)>=4&&Number(r.turn)<15&&Number(r.straight)>=4&&Number(r.straight)<9;
+ const valid=r=>exTimeOK(r.time||'')&&Number(r.lap)>=30&&Number(r.lap)<45&&Number(r.turn)>=4&&Number(r.turn)<15&&Number(r.straight)>=4&&Number(r.straight)<9;
  const complete=rows.filter(valid).length;
  return {available:complete===6,rows:complete===6?rows:[1,2,3,4,5,6].map(lane=>({lane})),completeTimes:complete===6?6:0,originalComplete:complete,source:'BOATRACE大村公式',provider:'omura-official-strict-v2',validation:complete===6?'strict-header-6of6':'rejected-partial-or-range'};
 }
@@ -498,7 +500,7 @@ function parseKaratsuOriginal(html){
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
  const day=(body.match(/(初日|最終日|[２-９2-9]\s*日目)/)||[])[1]?.replace(/\s/g,'')||'';
  const comments=[]; $('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);const lane=Number(c[0]);if(lane>=1&&lane<=6&&c.length>=2&&c.some(x=>x.length>12))comments[lane-1]=c.find(x=>x.length>12)||''});
- const valid=r=>/^6\.\d{2}$/.test(r.time||'')&&Number(r.lap)>=30&&Number(r.lap)<45&&Number(r.turn)>=4&&Number(r.turn)<15&&Number(r.straight)>=4&&Number(r.straight)<9;
+ const valid=r=>exTimeOK(r.time||'')&&Number(r.lap)>=30&&Number(r.lap)<45&&Number(r.turn)>=4&&Number(r.turn)<15&&Number(r.straight)>=4&&Number(r.straight)<9;
  const complete=rows.filter(valid).length;
  return {available:complete===6,rows:complete===6?rows:[1,2,3,4,5,6].map(lane=>({lane})),completeTimes:complete===6?6:0,originalComplete:complete,source:'BOATRACEからつ公式',meetingLabel:day||null,comments,provider:'karatsu-official-strict-v2',validation:complete===6?'strict-6of6':'rejected-partial-or-range'};
 }
