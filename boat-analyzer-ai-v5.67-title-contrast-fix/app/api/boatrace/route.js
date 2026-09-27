@@ -652,8 +652,12 @@ function parseBoatcastOriginal(text,jcd){
   by.set(lane,row);
  }
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
+ const inRange=(v,min,max)=>v==null||v===''||(Number.isFinite(Number(v))&&Number(v)>=min&&Number(v)<max);
+ const validRow=r=>inRange(r.time,6,9)&&inRange(r.lap,30,45)&&inRange(r.turn,4,15)&&inRange(r.straight,4,9);
+ const complete=rows.filter(r=>r.lap||r.turn||r.straight).length===6;
+ const valid=complete&&rows.every(validRow);
  const venue=String(jcd).padStart(2,'0')==='06'?'浜名湖':String(jcd).padStart(2,'0');
- return {available:rows.filter(r=>r.lap||r.turn||r.straight).length===6,rows,status,measureCount:count,measureLabels:labels,source:`BOATCAST公式・${venue}オリジナル展示`,provider:'boatcast'};
+ return {available:valid,rows:valid?rows:[1,2,3,4,5,6].map(l=>({lane:l})),status,measureCount:count,measureLabels:labels,source:`BOATCAST公式・${venue}オリジナル展示`,provider:'boatcast',validation:valid?'range-checked-6of6':complete?'rejected-range':'rejected-partial'};
 }
 async function getBoatcastOriginal(jcd,hd,rno){
  const jo=String(jcd).padStart(2,'0'),rr=String(rno).padStart(2,'0');
@@ -666,7 +670,7 @@ async function getOriginal(jcd,hd,rno,racers=[]){
  try{
   if(jcd==='01'){
    const boatcast=await getBoatcastOriginal(jcd,hd,rno);
-   if(boatcast.available)return {supported:true,venue:a.name,...boatcast,lapLabel:'1周',requestedDate:hd};
+   if(boatcast.available)return {supported:true,venue:a.name,...boatcast,lapLabel:(boatcast.measureLabels||[]).some(x=>String(x).includes('半周'))?'半周':'1周',requestedDate:hd};
    const html=await grabUrl('https://www.kiryu-kyotei.com/modules/raceinfo/?page=index_timedata',15);
    return {supported:true,venue:a.name,...parseKiryuTimedata(html,racers),requestedDate:hd};
   }
