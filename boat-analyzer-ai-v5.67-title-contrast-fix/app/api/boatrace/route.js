@@ -1142,7 +1142,10 @@ export async function GET(req){
    // Scheduled health audit: select each venue's current/next race from the official
    // deadline schedule instead of auditing fixed R1 all day.
    const fallbackRace=Number(rno||1),venues=Object.keys(ORIGINAL_SUPPORTED);
-   const nowJst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
+   // Read Japan time directly from Intl parts. Avoid reconstructing a Date from a
+   // localized string, which can shift the hour when the server itself runs in UTC.
+   const jstParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
+   const nowMin=Number(jstParts.hour)*60+Number(jstParts.minute);
    const rows=await Promise.all(venues.map(async code=>{
     const venue=ORIGINAL_SUPPORTED[code]?.name||code;
     try{
@@ -1151,7 +1154,6 @@ export async function GET(req){
       const indexHtml=await grab(`raceindex?hd=${hd}&jcd=${code}`,60),times=parseSchedule(indexHtml);
       if(times.length===12){
        scheduleStatus='official';
-       const nowMin=nowJst.getHours()*60+nowJst.getMinutes();
        const mins=times.map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m});
        const next=mins.findIndex(x=>x>nowMin);
        raceNo=next>=0?next+1:12;
