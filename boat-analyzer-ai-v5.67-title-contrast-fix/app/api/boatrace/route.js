@@ -1141,11 +1141,16 @@ export async function GET(req){
    return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race},{headers:{'Cache-Control':'public, s-maxage=45, stale-while-revalidate=180'}})
   }
   if(kind==='before'){
-   const [bb,oo]=await Promise.allSettled([grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),getOriginal(jcd,hd,rno)]);
+   // Exhibition is the most time-sensitive feed. Bypass both upstream and response
+   // caches so a pre-publication beforeinfo page cannot survive after the official update.
+   const beforeUrl=base+`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}&_=${Date.now()}`;
+   const [bb,oo]=await Promise.allSettled([
+    fetch(beforeUrl,{cache:'no-store',headers:REQUEST_HEADERS}).then(r=>{if(!r.ok)throw new Error(String(r.status));return r.text()}),
+    getOriginal(jcd,hd,rno)
+   ]);
    const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]},before=mergeBefore(commonBefore,original);
    if(bb.status==='rejected'&&!original.available)return Response.json({ok:false,error:'公式展示の取得に失敗しました'},{status:502,headers:{'Cache-Control':'no-store'}});
-   // A cached unpublished exhibition must not mask newly published official values.
-   return Response.json({ok:true,updatedAt:new Date().toISOString(),before},{headers:{'Cache-Control':'public, s-maxage=10'}})
+   return Response.json({ok:true,updatedAt:new Date().toISOString(),before},{headers:{'Cache-Control':'no-store, max-age=0'}})
   }
   if(kind==='result'){
    const html=await grab(`raceresult?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),result=parseResult(html);
