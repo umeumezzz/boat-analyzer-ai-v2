@@ -1136,7 +1136,9 @@ export async function GET(req){
   if(kind==='before'){
    const [bb,oo]=await Promise.allSettled([grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),getOriginal(jcd,hd,rno)]);
    const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]},before=mergeBefore(commonBefore,original);
-   return Response.json({ok:true,updatedAt:new Date().toISOString(),before},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
+   if(bb.status==='rejected'&&!original.available)return Response.json({ok:false,error:'公式展示の取得に失敗しました'},{status:502,headers:{'Cache-Control':'no-store'}});
+   // A cached unpublished exhibition must not mask newly published official values.
+   return Response.json({ok:true,updatedAt:new Date().toISOString(),before},{headers:{'Cache-Control':'public, s-maxage=10'}})
   }
   if(kind==='result'){
    const html=await grab(`raceresult?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),result=parseResult(html);
