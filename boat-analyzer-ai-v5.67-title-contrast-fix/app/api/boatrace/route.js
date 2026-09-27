@@ -656,9 +656,16 @@ function parseBoatcastOriginal(text,jcd){
 }
 async function getBoatcastOriginal(jcd,hd,rno){
  const jo=String(jcd).padStart(2,'0'),rr=String(rno).padStart(2,'0');
+ // Original exhibition is time-sensitive. Do not let the framework's revalidation
+ // cache keep a pre-publication/old BOATCAST response alive after the official update.
  const url=`https://race.boatcast.jp/txt/${jo}/bc_oriten_${hd}_${jo}_${rr}.txt`;
- try{const txt=await grabUrl(url,10);return {...parseBoatcastOriginal(txt,jo),urlPattern:'race.boatcast.jp/txt/{場}/bc_oriten_{日付}_{場}_{R}.txt'};}
- catch(e){return {available:false,rows:[],source:'BOATCAST公式・オリジナル展示',provider:'boatcast',error:String(e?.message||e)}}
+ const bust=Date.now();
+ try{
+  const r=await fetch(`${url}?v=${bust}`,{cache:'no-store',headers:REQUEST_HEADERS});
+  if(!r.ok)throw new Error(String(r.status));
+  const txt=await r.text();
+  return {...parseBoatcastOriginal(txt,jo),urlPattern:'race.boatcast.jp/txt/{場}/bc_oriten_{日付}_{場}_{R}.txt'};
+ }catch(e){return {available:false,rows:[],source:'BOATCAST公式・オリジナル展示',provider:'boatcast',error:String(e?.message||e)}}
 }
 async function getOriginal(jcd,hd,rno,racers=[]){
  const a=ORIGINAL_SUPPORTED[jcd];if(!a)return {supported:false,available:false,rows:[],source:null};
