@@ -111,7 +111,9 @@ html,body{background:#03152d;}
 .splashScreen>picture{position:absolute;inset:0;width:100%;height:100%;display:block}
 .splashScreen>picture>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;display:block;animation:splashZoom 2.6s ease-out both}
 @media(max-width:600px){
-  .splashScreen>picture>img{object-position:center center}
+  .splashScreen{background:#021638 url('/splash-nexus.jpg') center/cover no-repeat}
+  .splashScreen>picture{display:grid;place-items:center;background:#021638a8}
+  .splashScreen>picture>img{position:relative;width:100%;height:auto;max-height:100%;object-fit:contain;object-position:center center}
 }
 
 /* v5.67 readability hotfix: venue heading sits directly on the navy app background */

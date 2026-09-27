@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import {normalizeExhibitionST,validExhibitionTime,exhibitionStatus} from '../../exhibition.js';
 export const dynamic='force-dynamic';
 // v5.54 FAST4: run scraping close to BOAT RACE's Japanese origin.
 // Vercel Tokyo reduces origin round-trips substantially versus a distant default region.
@@ -32,11 +33,11 @@ function parseRace(html){
  return {racers:racers.slice(0,6)}
 }
 const ascii=s=>clean(s).replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/[．。]/g,'.');
-const stOK=s=>/^(?:F|L)?\.?\d{2}$/.test(ascii(s));
+const stOK=s=>!!normalizeExhibitionST(ascii(s));
 // Current-series ST is printed as .13 (or 0.13). Bare two-digit race numbers are never ST.
 const seriesStOK=s=>/^(?:F|L)?(?:0)?\.\d{2}$/.test(ascii(s));
 // Exhibition times can legitimately cross 7 seconds. Keep the format strict, but validate by a plausible numeric range instead of hard-coding 6.xx.
-const exTimeOK=s=>/^\d\.\d{2}$/.test(ascii(s))&&Number(ascii(s))>=6&&Number(ascii(s))<9;
+const exTimeOK=s=>validExhibitionTime(ascii(s));
 const courseOK=s=>/^[1-6]$/.test(ascii(s));
 const finishOK=s=>/^(?:[1-6]|F|L|K|S|転|落|妨|失)(?:着)?$/.test(ascii(s));
 function parseSeries(html,racers){
@@ -181,8 +182,7 @@ function parseBefore(html){const $=cheerio.load(html),body=clean($('body').text(
  $('table,section,div').filter((_,el)=>/展示タイム/.test(ascii($(el).text()))).each((_,box)=>{$(box).find('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);if(!c.length)return;const lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>exTimeOK(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)})});
  // Official compact exhibition rows.
  $('.is-fs12').each((_,el)=>{const c=$(el).children('td').map((_,td)=>ascii($(td).text())).get().filter(Boolean),lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>exTimeOK(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)});
- // If all six exhibition times are present as a contiguous official text block, map in lane order.
- if([...byLane.values()].filter(x=>x.time).length<6){const txt=ascii($('body').text()),pos=txt.indexOf('展示タイム');if(pos>=0){const chunk=txt.slice(pos,pos+1800),ts=[...chunk.matchAll(/(?:^|\s)([6-8]\.\d{2})(?=\s|$)/g)].map(m=>m[1]);const uniq=ts.slice(0,6);if(uniq.length===6)uniq.forEach((t,i)=>put(i+1,'',t))}}
+ // Never assign unlabelled times to lanes by position; a missing lane must stay missing.
  const rows=[1,2,3,4,5,6].map(lane=>byLane.get(lane)||{lane}),weather={};for(const k of ['気温','水温','風速','波高']){const m=body.match(new RegExp(k+'\\s*([0-9.]+\\s*(?:℃|m|cm)?)'));if(m)weather[k]=m[1]}const wind=(body.match(/風向\s*([^\s]{1,8})/)||[])[1];if(wind)weather['風向']=wind;return {available:rows.some(r=>r.st||r.time),rows,weather,completeTimes:rows.filter(r=>r.time).length,completeST:rows.filter(r=>r.st).length}}
 
 
@@ -271,16 +271,8 @@ function parseVenueOriginalTable(html,{source,provider,straight=true}={}){
    if(row.time||row.lap||row.turn||row.straight)by.set(lane,row);
   });
  });
- // Fallback for multi-row/colspan headers used by venue sites. Scope to a single racer row,
- // discard the lane cell first, then classify only plausible timing ranges.
- if(by.size<6){
-  $('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text()).replace(/\s+/g,' ').trim()).get().filter(Boolean);const lane=Number(c[0]);if(!(lane>=1&&lane<=6)||by.has(lane))return;
-   const vals=c.slice(1).flatMap(x=>x.match(/-?\d+(?:\.\d+)?/g)||[]).map(Number).filter(Number.isFinite);
-   const timeN=vals.find(n=>n>=6&&n<9),lapN=vals.find(n=>n>=30&&n<45);let turnN,straightN;
-   if(lapN!=null){const i=vals.indexOf(lapN),tail=vals.slice(i+1);turnN=tail.find(n=>n>=4&&n<15);if(straight&&turnN!=null){const j=tail.indexOf(turnN);straightN=tail.slice(j+1).find(n=>n>=4&&n<9)}}
-   const row={lane,time:timeN!=null?timeN.toFixed(2):'',lap:lapN!=null?lapN.toFixed(2):'',turn:turnN!=null?turnN.toFixed(2):'',straight:straightN!=null?straightN.toFixed(2):''};if(row.time||row.lap||row.turn||row.straight)by.set(lane,row);
-  });
- }
+ // A numeric-range fallback can mistake unrelated racer statistics for exhibition
+ // measurements. If the labelled header is absent, leave the metric unpublished.
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
  return {available:rows.some(r=>r.time||r.lap||r.turn||r.straight),rows,completeTimes:rows.filter(r=>r.time).length,originalComplete:rows.filter(r=>r.time&&r.lap&&r.turn&&(!straight||r.straight)).length,source,lapLabel:'1周',provider};
 }
@@ -1198,14 +1190,15 @@ export async function GET(req){
       grab(`odds3t?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
       grab(`raceresult?hd=${hd}&jcd=${code}&rno=${raceNo}`,20)
      ]);
-     if(rr.status!=='fulfilled')return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'racelist-fetch-error',needsReview:true};
+     if(rr.status!=='fulfilled')return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'racelist-fetch-error',needsReview:true,issues:['racelist-fetch']};
      const race=parseRace(rr.value).racers;
-     if(race.length!==6)return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'not-hosting',needsReview:false};
+     if(race.length!==6)return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'not-hosting-or-racelist-parse',needsReview:true,issues:['racelist-unverified']};
      const series=parseSeries(rr.value,race);
      const before=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],completeTimes:0,completeST:0};
      const original=or.status==='fulfilled'?or.value:{available:false,rows:[],error:'fetch-error'};
      const odds=od.status==='fulfilled'?parseOdds(od.value):[];
      const result=res.status==='fulfilled'?parseResult(res.value):{available:false,finish:[],trifecta:null,payout:null};
+     const exhibition=exhibitionStatus(mergeBefore(before,original).rows);
      const issues=[];
      if(series.status==='partial'||series.status==='empty-or-unparsed')issues.push('series');
      // Before/original/odds can legitimately be unpublished hours before the race.
@@ -1213,14 +1206,17 @@ export async function GET(req){
      if(bb.status==='rejected')issues.push('before-fetch');
      if(or.status==='rejected'||original.error)issues.push('original-fetch');
      if(od.status==='rejected')issues.push('odds-fetch');
+     if(res.status==='rejected')issues.push('result-fetch');
+     if(exhibition.invalid)issues.push('before-parse');
+     if(od.status==='fulfilled'&&odds.length>0&&odds.length!==120)issues.push('odds-partial');
      // Result is legitimately absent for the current/next race. Only validate its shape once published.
      if(result.available&&(!result.trifecta||!result.payout||result.finish.length<3))issues.push('result-parse');
      return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
       race:{racers:race.length},series:{parsed:series.count||0,runCount:series.runCount||0,status:series.status},
-      before:{available:!!before.available,exhibitionTimes:before.completeTimes||0,startTiming:before.completeST||0},
+      before:{available:!!before.available,exhibitionTimes:exhibition.timeCount,startTiming:exhibition.stCount,status:bb.status==='rejected'?'fetch-error':exhibition.invalid?'parse-error':exhibition.ready?'normal':before.available?'partial':'unpublished'},
       original:{available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null},
-      odds:{count:odds.length},
-      result:{available:!!result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0}};
+      odds:{count:odds.length,status:od.status==='rejected'?'fetch-error':odds.length===120?'normal':odds.length?'partial':'unpublished'},
+      result:{available:!!result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0,status:res.status==='rejected'?'fetch-error':result.available?'normal':'unpublished'}};
     }catch(e){return {jcd:code,venue,hosting:false,status:'audit-error',needsReview:true,error:String(e?.message||e)}}
    }));
    // Retry only real audit failures once. Pre-race absence is not a failure and is not retried.
@@ -1229,15 +1225,19 @@ export async function GET(req){
     await new Promise(resolve=>setTimeout(resolve,350));
     await Promise.all(suspects.map(async item=>{
      try{
-      const rr=await grab(`racelist?hd=${hd}&jcd=${item.jcd}&rno=${item.rno}`,1);
-      const racers=parseRace(rr).racers;if(racers.length!==6)return;
-      const series=parseSeries(rr,racers),issues=[];
-      if(series.status==='partial'||series.status==='empty-or-unparsed')issues.push('series');
-      item.retry={attempted:true,seriesStatus:series.status};
-      // A clean racelist/series retry recovers transient race-list parser/network issues.
-      // Other source-family failures stay flagged for review rather than being silently cleared.
-      const sourceIssues=(item.issues||[]).filter(x=>x!=='series');
-      item.issues=[...sourceIssues,...issues];
+      const issues=new Set(item.issues||[]),retried=[];
+      if([...issues].some(x=>x==='series'||x.startsWith('racelist-'))){
+       retried.push('racelist');const html=await grab(`racelist?hd=${hd}&jcd=${item.jcd}&rno=${item.rno}`,1),racers=parseRace(html).racers;
+       if(racers.length===6){issues.delete('racelist-fetch');issues.delete('racelist-unverified');item.hosting=true;const series=parseSeries(html,racers);item.series={parsed:series.count||0,runCount:series.runCount||0,status:series.status};if(series.status!=='partial'&&series.status!=='empty-or-unparsed')issues.delete('series')}
+      }
+      const retryFetch=async(family,path,parse)=>{if(!issues.has(family+'-fetch'))return;retried.push(family);try{const html=await grab(`${path}?hd=${hd}&jcd=${item.jcd}&rno=${item.rno}`,1);item[family]=parse(html);issues.delete(family+'-fetch')}catch{}};
+      await Promise.all([
+       retryFetch('before','beforeinfo',html=>{const before=parseBefore(html),status=exhibitionStatus(before.rows);return {available:before.available,exhibitionTimes:status.timeCount,startTiming:status.stCount,status:status.invalid?'parse-error':status.ready?'normal':before.available?'partial':'unpublished'}}),
+       retryFetch('odds','odds3t',html=>{const odds=parseOdds(html);return {count:odds.length,status:odds.length===120?'normal':odds.length?'partial':'unpublished'}}),
+       retryFetch('result','raceresult',html=>{const result=parseResult(html);return {available:result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0,status:result.available?'normal':'unpublished'}})
+      ]);
+      if(issues.has('original-fetch')){retried.push('original');try{const original=await getOriginal(item.jcd,hd,item.rno);if(!original.error){item.original={available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null};issues.delete('original-fetch')}}catch{}}
+      item.retry={attempted:true,families:retried};item.issues=[...issues];
       item.needsReview=item.issues.length>0;item.status=item.needsReview?'review':'ok';
       if(!item.needsReview)item.recovered=true;
      }catch(e){item.retry={attempted:true,status:'fetch-error'}}
