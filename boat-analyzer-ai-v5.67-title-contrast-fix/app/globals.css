@@ -134,3 +134,6 @@ html,body{background:#03152d;}
 /* Public race data completeness */
 .dataQuality{margin:8px 0 16px;padding:12px 14px;border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05)}.dataQuality div{display:flex;flex-direction:column;gap:3px}.dataQuality b{font-size:13px}.dataQuality span,.dataQuality small{font-size:11px;opacity:.72}.dataQuality.ready{border-color:rgba(80,210,145,.45);background:rgba(80,210,145,.08)}.dataQuality.ready b{color:#8be0b3}@media(max-width:600px){.dataQuality{align-items:flex-start;flex-direction:column;gap:5px}.dataQuality span{line-height:1.5}}
 
+
+/* Public prediction guard */
+.predictionGuard{margin:14px 0;padding:20px;border:1px solid rgba(255,255,255,.14);border-radius:14px;background:rgba(7,26,51,.05);text-align:center;display:flex;flex-direction:column;gap:5px}.predictionGuard b{font-size:15px;color:#0d2340}.predictionGuard span{font-size:12px;color:#66758a}
