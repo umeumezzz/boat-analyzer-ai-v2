@@ -166,7 +166,8 @@ function parseOmuraSeries(html,racers){
   });
  }
  const rows=(racers||[]).slice(0,6).map((r,i)=>({reg:r.reg,name:r.name,runs:runsBy[i].slice(0,14),values:runsBy[i].slice(0,14).map(x=>x.raw),avgST:avgST[i]||''}));
- return {rows,count:rows.filter(x=>x.runs.length).length,avgSTCount:avgST.filter(Boolean).length,parser:'omura-series-v6-six-column-reverse',source:'BOATRACE大村公式'};
+ const count=rows.filter(x=>x.runs.length).length;
+ return {rows,count,status:count===6?'complete':count?'partial':'not-published',avgSTCount:avgST.filter(Boolean).length,parser:'omura-series-v6-six-column-reverse',source:'BOATRACE大村公式'};
 }
 
 function parseBefore(html){const $=cheerio.load(html),body=clean($('body').text()),byLane=new Map();
