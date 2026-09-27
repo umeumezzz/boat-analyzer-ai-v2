@@ -980,7 +980,11 @@ function parseResult(html){
  const finish=[];
  $('table tr').each((_,tr)=>{const c=$(tr).find('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);if(c.length>=2&&/^[1-6]$/.test(c[0])&&/^[1-6]$/.test(c[1]))finish.push({place:Number(c[0]),lane:Number(c[1])})});
  const tri=body.match(/3連単\s*([1-6])\s*[-－]\s*([1-6])\s*[-－]\s*([1-6])\s*[¥￥]?\s*([0-9,]+)\s*円?/);
- return {available:!!tri||finish.length>=3,finish:finish.slice(0,6),trifecta:tri?`${tri[1]}-${tri[2]}-${tri[3]}`:null,payout:tri?Number(tri[4].replace(/,/g,'')):null};
+ // The official payout page often omits the finish table. Its winning trifecta
+ // explicitly identifies places 1-3; do not invent the remaining placements.
+ const validTri=tri&&new Set(tri.slice(1,4)).size===3&&Number(tri[4].replace(/,/g,''))>0;
+ const verifiedFinish=finish.length>=3?finish.slice(0,6):validTri?[1,2,3].map((place,i)=>({place,lane:Number(tri[i+1])})):[];
+ return {available:!!validTri||verifiedFinish.length>=3,finish:verifiedFinish,trifecta:validTri?`${tri[1]}-${tri[2]}-${tri[3]}`:null,payout:validTri?Number(tri[4].replace(/,/g,'')):null};
 }
 function parseRacerSearch(html){
  const $=cheerio.load(html),out=[];
