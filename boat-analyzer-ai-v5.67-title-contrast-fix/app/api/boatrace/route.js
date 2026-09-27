@@ -1177,7 +1177,7 @@ export async function GET(req){
      if(bb.status==='rejected')issues.push('before-fetch');
      if(or.status==='rejected'||original.error)issues.push('original-fetch');
      if(od.status==='rejected')issues.push('odds-fetch');
-     if(res.status==='rejected')issues.push('result-fetch');
+     // Result is legitimately absent for the current/next race. Only validate its shape once published.
      if(result.available&&(!result.trifecta||!result.payout||result.finish.length<3))issues.push('result-parse');
      return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
       race:{racers:race.length},series:{parsed:series.count||0,runCount:series.runCount||0,status:series.status},
@@ -1187,8 +1187,28 @@ export async function GET(req){
       result:{available:!!result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0}};
     }catch(e){return {jcd:code,venue,hosting:false,status:'audit-error',needsReview:true,error:String(e?.message||e)}}
    }));
+   // Retry only real audit failures once. Pre-race absence is not a failure and is not retried.
+   const suspects=rows.filter(x=>x.needsReview);
+   if(suspects.length){
+    await new Promise(resolve=>setTimeout(resolve,350));
+    await Promise.all(suspects.map(async item=>{
+     try{
+      const rr=await grab(`racelist?hd=${hd}&jcd=${item.jcd}&rno=${item.rno}`,1);
+      const racers=parseRace(rr).racers;if(racers.length!==6)return;
+      const series=parseSeries(rr,racers),issues=[];
+      if(series.status==='partial'||series.status==='empty-or-unparsed')issues.push('series');
+      item.retry={attempted:true,seriesStatus:series.status};
+      // A clean racelist/series retry recovers transient race-list parser/network issues.
+      // Other source-family failures stay flagged for review rather than being silently cleared.
+      const sourceIssues=(item.issues||[]).filter(x=>x!=='series');
+      item.issues=[...sourceIssues,...issues];
+      item.needsReview=item.issues.length>0;item.status=item.needsReview?'review':'ok';
+      if(!item.needsReview)item.recovered=true;
+     }catch(e){item.retry={attempted:true,status:'fetch-error'}}
+    }));
+   }
    const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
-   const summary={venues:24,hosting:hosting.length,healthy:hosting.filter(x=>x.status==='ok').length,needsReview:review.length};
+   const summary={venues:24,hosting:hosting.length,healthy:hosting.filter(x=>x.status==='ok').length,needsReview:review.length,recovered:rows.filter(x=>x.recovered).length};
    if(review.length)console.warn('[full-audit]',JSON.stringify({hd,mode:'current-next',summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,rno:x.rno,status:x.status,issues:x.issues||[]}))}));
    else console.log('[full-audit]',JSON.stringify({hd,mode:'current-next',summary}));
    return Response.json({ok:true,hd,mode:'current-next',fallbackRace,summary,review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}})
