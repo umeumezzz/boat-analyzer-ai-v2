@@ -445,7 +445,9 @@ function parseOmuraOriginal(html){
   });
  });
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
- return {available:rows.some(r=>r.st||r.time||r.lap||r.turn||r.straight),rows,completeTimes:rows.filter(r=>r.time).length,source:'BOATRACE大村公式'};
+ const valid=r=>/^6\.\d{2}$/.test(r.time||'')&&Number(r.lap)>=30&&Number(r.lap)<45&&Number(r.turn)>=4&&Number(r.turn)<15&&Number(r.straight)>=4&&Number(r.straight)<9;
+ const complete=rows.filter(valid).length;
+ return {available:complete===6,rows:complete===6?rows:[1,2,3,4,5,6].map(lane=>({lane})),completeTimes:complete===6?6:0,originalComplete:complete,source:'BOATRACE大村公式',provider:'omura-official-strict-v2',validation:complete===6?'strict-header-6of6':'rejected-partial-or-range'};
 }
 
 function parseKaratsuOriginal(html){
@@ -496,7 +498,9 @@ function parseKaratsuOriginal(html){
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
  const day=(body.match(/(初日|最終日|[２-９2-9]\s*日目)/)||[])[1]?.replace(/\s/g,'')||'';
  const comments=[]; $('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);const lane=Number(c[0]);if(lane>=1&&lane<=6&&c.length>=2&&c.some(x=>x.length>12))comments[lane-1]=c.find(x=>x.length>12)||''});
- return {available:rows.some(r=>r.st||r.time||r.lap||r.turn||r.straight),rows,completeTimes:rows.filter(r=>r.time).length,source:'BOATRACEからつ公式',meetingLabel:day||null,comments};
+ const valid=r=>/^6\.\d{2}$/.test(r.time||'')&&Number(r.lap)>=30&&Number(r.lap)<45&&Number(r.turn)>=4&&Number(r.turn)<15&&Number(r.straight)>=4&&Number(r.straight)<9;
+ const complete=rows.filter(valid).length;
+ return {available:complete===6,rows:complete===6?rows:[1,2,3,4,5,6].map(lane=>({lane})),completeTimes:complete===6?6:0,originalComplete:complete,source:'BOATRACEからつ公式',meetingLabel:day||null,comments,provider:'karatsu-official-strict-v2',validation:complete===6?'strict-6of6':'rejected-partial-or-range'};
 }
 function parseHamanakoOriginal(html){
  const $=cheerio.load(html),by=new Map(),body=ascii($('body').text());
