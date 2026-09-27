@@ -1143,11 +1143,12 @@ export async function GET(req){
    const rows=await Promise.all(venues.map(async code=>{
     const venue=ORIGINAL_SUPPORTED[code]?.name||code;
     try{
-     const [rr,bb,or,od]=await Promise.allSettled([
+     const [rr,bb,or,od,res]=await Promise.allSettled([
       grab(`racelist?hd=${hd}&jcd=${code}&rno=${raceNo}`,60),
       grab(`beforeinfo?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
       getOriginal(code,hd,raceNo),
-      grab(`odds3t?hd=${hd}&jcd=${code}&rno=${raceNo}`,20)
+      grab(`odds3t?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
+      grab(`raceresult?hd=${hd}&jcd=${code}&rno=${raceNo}`,20)
      ]);
      if(rr.status!=='fulfilled')return {jcd:code,venue,hosting:false,status:'racelist-fetch-error',needsReview:true};
      const race=parseRace(rr.value).racers;
@@ -1156,6 +1157,7 @@ export async function GET(req){
      const before=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],completeTimes:0,completeST:0};
      const original=or.status==='fulfilled'?or.value:{available:false,rows:[],error:'fetch-error'};
      const odds=od.status==='fulfilled'?parseOdds(od.value):[];
+     const result=res.status==='fulfilled'?parseResult(res.value):{available:false,finish:[],trifecta:null,payout:null};
      const issues=[];
      if(series.status==='partial'||series.status==='empty-or-unparsed')issues.push('series');
      // Before/original/odds can legitimately be unpublished hours before the race.
@@ -1163,11 +1165,14 @@ export async function GET(req){
      if(bb.status==='rejected')issues.push('before-fetch');
      if(or.status==='rejected'||original.error)issues.push('original-fetch');
      if(od.status==='rejected')issues.push('odds-fetch');
+     if(res.status==='rejected')issues.push('result-fetch');
+     if(result.available&&(!result.trifecta||!result.payout||result.finish.length<3))issues.push('result-parse');
      return {jcd:code,venue,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
       race:{racers:race.length},series:{parsed:series.count||0,runCount:series.runCount||0,status:series.status},
       before:{available:!!before.available,exhibitionTimes:before.completeTimes||0,startTiming:before.completeST||0},
       original:{available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null},
-      odds:{count:odds.length}};
+      odds:{count:odds.length},
+      result:{available:!!result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0}};
     }catch(e){return {jcd:code,venue,hosting:false,status:'audit-error',needsReview:true,error:String(e?.message||e)}}
    }));
    const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
