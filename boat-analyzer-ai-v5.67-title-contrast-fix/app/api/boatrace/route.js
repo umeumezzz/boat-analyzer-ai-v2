@@ -3,7 +3,7 @@ import {officialText} from '../../lib/official-http.js';
 import {normalizeExhibitionST,validExhibitionTime,exhibitionStatus} from '../../exhibition.js';
 import {loadSource,peekSource,streamSources} from '../../lib/live-store.js';
 export const dynamic='force-dynamic';
-export const maxDuration=60;
+export const maxDuration=180;
 // v5.54 FAST4: run scraping close to BOAT RACE's Japanese origin.
 // Vercel Tokyo reduces origin round-trips substantially versus a distant default region.
 export const preferredRegion='hnd1';
@@ -1087,19 +1087,21 @@ function liveLoaders(hd,jcd,rno){
 }
 
 async function fullAudit(hd,fallbackRace,jstDate){
- const codes=Object.keys(ORIGINAL_SUPPORTED),rows=[];
+ const codes=Object.keys(ORIGINAL_SUPPORTED),rows=[],budgetEnd=Date.now()+120000;
+ const failedParts=error=>Object.fromEntries(['schedule','race','before','original','series','odds','result'].map(f=>[f,{status:'fetch-error',error}]));
  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).map(x=>[x.type,x.value]));
  const nowMin=Number(parts.hour)*60+Number(parts.minute);
  let nextIndex=0;
  const worker=async()=>{while(nextIndex<codes.length){const code=codes[nextIndex++],row={jcd:code,venue:ORIGINAL_SUPPORTED[code].name};
   try{
+   if(Date.now()>budgetEnd){rows.push({...row,hosting:null,status:'audit-budget-exceeded',needsReview:true,...failedParts('audit-budget-exceeded')});continue}
    const html=await freshText(base+`raceindex?hd=${hd}&jcd=${code}`),times=parseSchedule(html);
    if(times.length!==12){const absent=/データがありません/.test(clean(cheerio.load(html)('body').text()));rows.push({...row,hosting:absent?false:null,status:absent?'not-hosting':'schedule-parse-error',needsReview:!absent,schedule:{status:absent?'waiting':'parse-error'},race:{status:'waiting',racers:0},before:{status:'waiting',exhibitionTimes:0,startTiming:0},original:{status:'waiting'},series:{status:'waiting'},odds:{status:'waiting',count:0},result:{status:'waiting'}});continue}
    const next=hd===jstDate?times.findIndex(t=>{const [h,m]=t.split(':').map(Number);return h*60+m>nowMin}):-1;
    const raceNo=next>=0?next+1:12,loaders=liveLoaders(hd,code,raceNo),families=['card','before','original','series','odds','result'];
    const pairs=await Promise.all(families.map(async family=>{
     const key=sourceKey(hd,code,raceNo,family);let value=await loadSource(key,loaders[family],SOURCE_TTL[family]);
-    if(value.status==='fetch-error'){value={...await loadSource(key,loaders[family],SOURCE_TTL[family]),retried:true}}
+    if(value.status==='fetch-error'&&Date.now()+15000<budgetEnd){value={...await loadSource(key,loaders[family],SOURCE_TTL[family]),retried:true}}
     return [family,value];
    })),sources=Object.fromEntries(pairs);
    const describe=v=>({status:v.status,fetchedAt:v.fetchedAt,ageMs:v.fetchedAt?Date.now()-Date.parse(v.fetchedAt):null,durationMs:v.durationMs,cache:v.cache,counts:v.counts||null,error:v.error||null,retried:!!v.retried});
@@ -1110,7 +1112,7 @@ async function fullAudit(hd,fallbackRace,jstDate){
     original:{...describe(sources.original),provider:sources.original.data?.provider,measureLabels:sources.original.data?.measureLabels||[],validation:sources.original.data?.validation,counts:sources.original.data?.counts||null},
     series:{...describe(sources.series),parsed:sources.series.data?.count||0,seriesStatus:sources.series.data?.status},
     odds:{...describe(sources.odds),count:sources.odds.data?.length||0},result:{...describe(sources.result),available:sources.result.data?.available||false,trifecta:sources.result.data?.trifecta||null}});
-  }catch(e){rows.push({...row,hosting:null,status:'schedule-fetch-error',needsReview:true,error:String(e?.message||e)})}
+  }catch(e){rows.push({...row,hosting:null,status:'schedule-fetch-error',needsReview:true,...failedParts(String(e?.message||e)),error:String(e?.message||e)})}
  }};
  await Promise.all(Array.from({length:3},worker));rows.sort((a,b)=>a.jcd.localeCompare(b.jcd));
  const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
