@@ -4,5 +4,8 @@
       "path": "/api/boatrace?kind=fullaudit&rno=1",
       "schedule": "0 6 * * *"
     }
+  ],
+  "regions": [
+    "hnd1"
   ]
 }

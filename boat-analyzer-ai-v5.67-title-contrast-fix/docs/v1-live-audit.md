@@ -50,3 +50,7 @@ Real Kiryu feed declares 半周ラップ. Suminoe, Tokuyama and Amagasaki declar
 - GitHub commit, Vercel READY, production source counts and production latency must be checked separately after publishing these changes. A local build is not evidence of production rollout.
 
 An unconditional “all venues / all publication timings / always prewarmed with no visitors” v1.0 certification is not supported by these checks. The fixes address verified defects and must retain the above monitoring gates.
+
+## Production follow-up
+
+Deployment `8f7762d7` was READY, but its region was iad1 despite route preferredRegion hnd1. BOATCAST succeeded in 526ms while official card/before/odds aborted at 8000ms. Added project-level vercel.json regions [hnd1] to make the Tokyo deployment explicit. Region/official fetch recovery must be verified on the next production deployment.
