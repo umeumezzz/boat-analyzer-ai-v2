@@ -1077,7 +1077,7 @@ function liveLoaders(hd,jcd,rno){
  const path=name=>base+`${name}?hd=${hd}&jcd=${jcd}&rno=${rno}`;
  const loaders={
   card:async()=>{const html=await freshText(path('racelist')),race=parseRace(html),series=parseSeries(html,race.racers);return {status:race.laneVerified?'published':race.racers.length?'incomplete':'waiting',data:{race,series},source:'BOAT RACE公式',counts:{racers:race.racers.length,series:series.count}}},
-  before:async()=>{const html=await freshText(path('beforeinfo')),before=parseBefore(html),quality=exhibitionStatus(before.rows);return {status:before.rejected?.length?'parse-error':quality.ready?'published':before.available?'incomplete':(before.sourceHasExhibition||before.sourceHasST)?'parse-error':'waiting',data:before,counts:{time:quality.timeCount,st:quality.stCount,rejected:before.rejected?.length||0},source:'BOAT RACE公式',officialPublished:null}},
+  before:async()=>{const html=await freshText(path('beforeinfo')),before=parseBefore(html),quality=exhibitionStatus(before.rows);return {status:before.rejected?.length?'parse-error':quality.ready?'published':before.available?'incomplete':before.sourceHasST?'parse-error':'waiting',data:before,counts:{time:quality.timeCount,st:quality.stCount,rejected:before.rejected?.length||0},source:'BOAT RACE公式',officialPublished:null}},
   original:async()=>{const card=jcd==='01'?await loadSource(sourceKey(hd,jcd,rno,'card'),loaders.card,SOURCE_TTL.card):null;const original=await getOriginal(jcd,hd,rno,card?.data?.race?.racers||[]);if(original.error)throw new Error(original.error);return {status:originalStatus(original),data:original,counts:{time:original.completeTimes||0,original:original.originalComplete||0},source:original.source}},
   odds:async()=>{const html=await freshText(path('odds3t')),odds=parseOdds(html),unique=new Set(odds.map(x=>x.combo));return {status:odds.length===120&&unique.size===120?'published':odds.length?'incomplete':'waiting',data:odds,counts:{odds:odds.length},source:'BOAT RACE公式'}},
   result:async()=>{const html=await freshText(path('raceresult')),result=parseResult(html);return {status:result.available?(result.trifecta&&result.payout&&result.finish?.length>=3?'published':'incomplete'):'waiting',data:result,source:'BOAT RACE公式'}}
@@ -1095,8 +1095,8 @@ async function fullAudit(hd,fallbackRace,jstDate){
  const worker=async()=>{while(nextIndex<codes.length){const code=codes[nextIndex++],row={jcd:code,venue:ORIGINAL_SUPPORTED[code].name};
   try{
    if(Date.now()>budgetEnd){rows.push({...row,hosting:null,status:'audit-budget-exceeded',needsReview:true,...failedParts('audit-budget-exceeded')});continue}
-   const html=await freshText(base+`raceindex?hd=${hd}&jcd=${code}`),times=parseSchedule(html);
-   if(times.length!==12){const absent=/データがありません/.test(clean(cheerio.load(html)('body').text()));rows.push({...row,hosting:absent?false:null,status:absent?'not-hosting':'schedule-parse-error',needsReview:!absent,schedule:{status:absent?'waiting':'parse-error'},race:{status:'waiting',racers:0},before:{status:'waiting',exhibitionTimes:0,startTiming:0},original:{status:'waiting'},series:{status:'waiting'},odds:{status:'waiting',count:0},result:{status:'waiting'}});continue}
+   const scheduled=await loadSchedule(hd,code);if(scheduled.status==='fetch-error')throw Error(scheduled.error);const times=scheduled.data?.times||[];
+   if(times.length!==12){const absent=scheduled.data?.hosting===false;rows.push({...row,hosting:absent?false:null,status:absent?'not-hosting':'schedule-parse-error',needsReview:!absent,schedule:{status:absent?'waiting':'parse-error'},race:{status:'waiting',racers:0},before:{status:'waiting',exhibitionTimes:0,startTiming:0},original:{status:'waiting'},series:{status:'waiting'},odds:{status:'waiting',count:0},result:{status:'waiting'}});continue}
    const next=hd===jstDate?times.findIndex(t=>{const [h,m]=t.split(':').map(Number);return h*60+m>nowMin}):-1;
    const raceNo=next>=0?next+1:12,loaders=liveLoaders(hd,code,raceNo),families=['card','before','original','series','odds','result'];
    const pairs=await Promise.all(families.map(async family=>{
@@ -1119,9 +1119,13 @@ async function fullAudit(hd,fallbackRace,jstDate){
  return {ok:true,hd,mode:hd===jstDate?'current-next':'completed-day',fallbackRace,summary:{venues:24,hosting:hosting.length,healthy:hosting.filter(x=>!x.needsReview).length,needsReview:review.length},rows,review,updatedAt:new Date().toISOString()};
 }
 
+function loadSchedule(hd,jcd){
+ return loadSource(`${hd}:${jcd}:1:schedule`,async()=>{const html=await freshText(base+`raceindex?hd=${hd}&jcd=${jcd}`),times=parseSchedule(html),absent=/データがありません/.test(clean(cheerio.load(html)('body').text()));return {status:times.length===12||absent?'published':'parse-error',data:{times,meeting:parseMeetingMeta(html,hd),hosting:times.length===12?true:absent?false:null}}},120000);
+}
+
 function calendarStream(hd){
  const encoder=new TextEncoder(),codes=Object.keys(ORIGINAL_SUPPORTED);let stopped=false,index=0;
- return new ReadableStream({async start(controller){const worker=async()=>{while(index<codes.length&&!stopped){const jcd=codes[index++],value=await loadSource(`${hd}:${jcd}:1:schedule`,async()=>{const html=await freshText(base+`raceindex?hd=${hd}&jcd=${jcd}`),times=parseSchedule(html),absent=/データがありません/.test(clean(cheerio.load(html)('body').text()));return {status:times.length===12||absent?'published':'parse-error',data:{times,meeting:parseMeetingMeta(html,hd),hosting:times.length===12?true:absent?false:null}}},120000);if(!stopped)controller.enqueue(encoder.encode(JSON.stringify({jcd,...value})+'\n'))}};await Promise.allSettled(Array.from({length:4},worker));if(!stopped)controller.close()},cancel(){stopped=true}});
+ return new ReadableStream({async start(controller){const worker=async()=>{while(index<codes.length&&!stopped){const jcd=codes[index++],value=await loadSchedule(hd,jcd);if(!stopped)controller.enqueue(encoder.encode(JSON.stringify({jcd,...value})+'\n'))}};await Promise.allSettled(Array.from({length:4},worker));if(!stopped)controller.close()},cancel(){stopped=true}});
 }
 
 export async function GET(req){
@@ -1160,9 +1164,8 @@ export async function GET(req){
    return kind==='snapshot'?Response.json({ok:true,...data},{headers:{'Cache-Control':'no-store'}}):new Response(data,{headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store, max-age=0','X-Accel-Buffering':'no'}});
   }
   if(kind==='schedule'){
-   const html=await grab(`raceindex?hd=${hd}&jcd=${jcd}`,60),times=parseSchedule(html);
-   const meeting=parseMeetingMeta(html,hd);
-   return Response.json({ok:times.length===12,times,meeting,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=60, stale-while-revalidate=300'}})
+   const value=await loadSchedule(hd,jcd),data=value.data||{};
+   return Response.json({ok:value.status==='published'&&data.times?.length===12,...data,status:value.status,updatedAt:value.fetchedAt,error:value.error},{headers:{'Cache-Control':'no-store'}});
   }
   if(kind==='course'){
    if(jcd==='06'){
