@@ -27,3 +27,10 @@ export function exhibitionStatus(rows){
  const invalid=[...byLane.values()].some(r=>(String(r.time??'').trim()&&!validExhibitionTime(r.time))||(String(r.st??'').trim()&&!normalizeExhibitionST(r.st)));
  return {ready:byLane.size===6&&timeCount===6&&stCount===6&&!invalid,timeCount,stCount,invalid};
 }
+
+export function validOriginalMetric(value,field,lapLabel='1周'){
+ if(field==='time')return validExhibitionTime(value);
+ const v=compact(value);if(!/^\d{1,2}\.\d{1,2}$/.test(v))return false;
+ const ranges={lap:lapLabel==='半周'?[12,30]:[30,45],turn:[4,15],straight:[4,9]},range=ranges[field];
+ return !!range&&Number(v)>=range[0]&&Number(v)<range[1];
+}

@@ -1,6 +1,8 @@
 import * as cheerio from 'cheerio';
 import {normalizeExhibitionST,validExhibitionTime,exhibitionStatus} from '../../exhibition.js';
+import {loadSource,peekSource,streamSources} from '../../lib/live-store.js';
 export const dynamic='force-dynamic';
+export const maxDuration=60;
 // v5.54 FAST4: run scraping close to BOAT RACE's Japanese origin.
 // Vercel Tokyo reduces origin round-trips substantially versus a distant default region.
 export const preferredRegion='hnd1';
@@ -9,29 +11,32 @@ const clean=s=>(s||'').replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim();
 const REQUEST_HEADERS={'User-Agent':'Mozilla/5.0 AppleWebKit/537.36 Chrome/126 Safari/537.36','Accept-Language':'ja-JP,ja;q=0.9'};
 const inflight=new Map();
 async function cachedText(url,ttl){
- const key=`${ttl}:${url}`;
+ const key=url;
  if(inflight.has(key))return inflight.get(key);
- const task=fetch(url,{next:{revalidate:ttl},headers:REQUEST_HEADERS})
+ const task=fetch(url,{...(ttl<=300?{cache:'no-store'}:{next:{revalidate:ttl}}),signal:AbortSignal.timeout(8000),headers:REQUEST_HEADERS})
   .then(r=>{if(!r.ok)throw new Error(String(r.status));return r.text()})
   .finally(()=>inflight.delete(key));
  inflight.set(key,task);
  return task;
 }
+async function freshText(url){return cachedText(url,0)}
 async function grab(path,ttl=20){
  return cachedText(base+path,ttl);
 }
 function parseRace(html){
- const $=cheerio.load(html),racers=[];
- $('tbody tr').each((_,tr)=>{
-  const cells=$(tr).find('th,td').map((_,td)=>clean($(td).text())).get().filter(Boolean),joined=cells.join(' | '),g=joined.match(/\b(A1|A2|B1|B2)\b/);
-  if(!g)return;
-  const reg=(joined.match(/\b\d{4}\b/)||[])[0]||'';
-  let name='';
-  for(const c of cells){if(c.includes(g[1])){name=clean(c.replace(reg,'').replace(g[1],'').replace(/\d{2,3}歳.*/,''));break}}
-  if(name&&!racers.some(r=>r.reg===reg||r.name===name))racers.push({reg,name:name.slice(0,18),grade:g[1],stats:cells.filter(x=>x!==name&&x!==g[1]&&x!==reg).slice(0,10)})
+ const $=cheerio.load(html),by=new Map();
+ $('tbody').each((_,tbody)=>{
+  const tr=$(tbody).children('tr').first(),cells=tr.children('th,td'),laneText=clean(cells.first().text()).replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+  if(!/^[1-6]$/.test(laneText))return;
+  const lane=Number(laneText),joined=clean(tr.text()),grade=joined.match(/\b(A1|A2|B1|B2)\b/)?.[1];if(!grade)return;
+  const profile=tr.find('a[href*="toban="]'),href=profile.first().attr('href')||'',reg=href.match(/toban=(\d{4})/)?.[1],name=clean(profile.filter((__,a)=>!$(a).find('img').length).first().text());
+  if(!reg||!name||by.has(lane))return;
+  by.set(lane,{lane,reg,name:name.slice(0,18),grade,stats:cells.map((__,td)=>clean($(td).text())).get().filter(Boolean).slice(0,10)});
  });
- return {racers:racers.slice(0,6)}
+ const racers=[...by.values()].sort((a,b)=>a.lane-b.lane);
+ return {racers,laneVerified:racers.length===6&&racers.every((r,i)=>r.lane===i+1)&&new Set(racers.map(r=>r.reg)).size===6};
 }
+
 const ascii=s=>clean(s).replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/[．。]/g,'.');
 const stOK=s=>!!normalizeExhibitionST(ascii(s));
 // Current-series ST is printed as .13 (or 0.13). Bare two-digit race numbers are never ST.
@@ -173,17 +178,38 @@ function parseOmuraSeries(html,racers){
  return {rows,count,status:count===6?'complete':count?'partial':'not-published',avgSTCount:avgST.filter(Boolean).length,parser:'omura-series-v6-six-column-reverse',source:'BOATRACE大村公式'};
 }
 
-function parseBefore(html){const $=cheerio.load(html),body=clean($('body').text()),byLane=new Map();
- const put=(lane,st,time)=>{lane=Number(lane);if(!(lane>=1&&lane<=6))return;const old=byLane.get(lane)||{lane};st=ascii(st||'');time=ascii(time||'');if(stOK(st)&&!old.st)old.st=st;if(exTimeOK(time)&&!old.time)old.time=time;byLane.set(lane,old)};
- const vals=el=>$(el).find('th,td,span,div').map((_,x)=>ascii($(x).text())).get().filter(Boolean);
- // Official start-exhibition blocks. Some layouts place ST and exhibition time in sibling/descendant nodes.
- $('.table1_boatImage1').each((_,el)=>{const a=vals(el),lane=Number(ascii($(el).find('.table1_boatImage1Number').first().text()))||a.map(Number).find(x=>x>=1&&x<=6),st=ascii($(el).find('.table1_boatImage1Time').first().text())||a.find(stOK),time=a.find(x=>exTimeOK(x));if(lane)put(lane,st,time)});
- // Scope parsing to tables/blocks explicitly containing 展示タイム; pair each data row with its lane.
- $('table,section,div').filter((_,el)=>/展示タイム/.test(ascii($(el).text()))).each((_,box)=>{$(box).find('tr').each((_,tr)=>{const c=$(tr).children('th,td').map((_,td)=>ascii($(td).text())).get().filter(Boolean);if(!c.length)return;const lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>exTimeOK(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)})});
- // Official compact exhibition rows.
- $('.is-fs12').each((_,el)=>{const c=$(el).children('td').map((_,td)=>ascii($(td).text())).get().filter(Boolean),lane=c.map(Number).find(x=>x>=1&&x<=6),time=c.find(x=>exTimeOK(x)),st=c.find(stOK);if(lane&&(time||st))put(lane,st,time)});
- // Never assign unlabelled times to lanes by position; a missing lane must stay missing.
- const rows=[1,2,3,4,5,6].map(lane=>byLane.get(lane)||{lane}),weather={};for(const k of ['気温','水温','風速','波高']){const m=body.match(new RegExp(k+'\\s*([0-9.]+\\s*(?:℃|m|cm)?)'));if(m)weather[k]=m[1]}const wind=(body.match(/風向\s*([^\s]{1,8})/)||[])[1];if(wind)weather['風向']=wind;return {available:rows.some(r=>r.st||r.time),rows,weather,completeTimes:rows.filter(r=>r.time).length,completeST:rows.filter(r=>r.st).length}}
+function parseBefore(html){
+ const $=cheerio.load(html),body=clean($('body').text()),byLane=new Map(),rejected=[];
+ const put=(lane,field,value)=>{
+  const v=ascii(value||'');if(!v||/^(?:-|—|−|\*|\s)+$/.test(v))return;
+  if(!(lane>=1&&lane<=6)||!Number.isInteger(lane))return;
+  const valid=field==='st'?stOK(v):exTimeOK(v);
+  if(!valid){rejected.push({lane,field,value:v});return}
+  const old=byLane.get(lane)||{lane},normalized=field==='st'?normalizeExhibitionST(v).label:v;if(old[field]&&old[field]!==normalized){rejected.push({lane,field,value:v,reason:'conflicting-lane-value'});return}old[field]=normalized;byLane.set(lane,old);
+ };
+ // The official start-exhibition block carries an explicit lane and its ST.
+ $('.table1_boatImage1').each((_,el)=>{
+  const lane=Number(ascii($(el).find('.table1_boatImage1Number').first().text()));
+  put(lane,'st',$(el).find('.table1_boatImage1Time').first().text());
+ });
+ // Read only a labelled exhibition table's first racer row. Previous-run ST rows
+ // inside the same tbody must never stand in for the current exhibition ST.
+ $('table').each((_,table)=>{
+  const headers=$(table).find('thead tr').first().children('th,td').map((__,el)=>ascii($(el).text()).replace(/\s/g,'')).get();
+  const timeIndex=headers.findIndex(x=>x==='展示タイム'||x==='展示');
+  const laneIndex=headers.findIndex(x=>x==='枠'||x==='艇');
+  if(timeIndex<0||laneIndex<0)return;
+  $(table).children('tbody').each((__,tbody)=>{
+   const cells=$(tbody).children('tr').first().children('th,td');
+   const rawLane=ascii(cells.eq(laneIndex).text());if(!/^[1-6]$/.test(rawLane))return;
+   put(Number(rawLane),'time',cells.eq(timeIndex).text());
+  });
+ });
+ const rows=[1,2,3,4,5,6].map(lane=>byLane.get(lane)||{lane}),weather={};
+ for(const k of ['気温','水温','風速','波高']){const m=body.match(new RegExp(k+'\\s*([0-9.]+\\s*(?:℃|m|cm)?)'));if(m)weather[k]=m[1]}
+ const wind=(body.match(/風向\s*([^\s]{1,8})/)||[])[1];if(wind)weather['風向']=wind;
+ return {available:rows.some(r=>r.st||r.time),rows,weather,completeTimes:rows.filter(r=>r.time).length,completeST:rows.filter(r=>r.st).length,rejected,sourceHasExhibition:$('thead').toArray().some(x=>/展示\s*タイム/.test(ascii($(x).text()))),sourceHasST:$('.table1_boatImage1Time').toArray().some(x=>ascii($(x).text()))};
+}
 
 
 // v5.6 original exhibition adapters. Venue-specific official pages are primary for
@@ -276,46 +302,10 @@ function parseVenueOriginalTable(html,{source,provider,straight=true}={}){
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
  return {available:rows.some(r=>r.time||r.lap||r.turn||r.straight),rows,completeTimes:rows.filter(r=>r.time).length,originalComplete:rows.filter(r=>r.time&&r.lap&&r.turn&&(!straight||r.straight)).length,source,lapLabel:'1周',provider};
 }
-function strictVenueRows(html,{source,provider,straight=false}={}){
- const $=cheerio.load(html),by=new Map();
- const dec=s=>String(s||'').match(/-?\d+\.\d{1,2}/g)||[];
- const n2=v=>{const n=Number(v);return Number.isFinite(n)?n:null};
- $('tr').each((_,tr)=>{
-  const cells=$(tr).children('th,td').map((_,td)=>ascii($(td).text()).replace(/\s+/g,' ').trim()).get().filter(Boolean);
-  if(!cells.length)return;
-  const lane=Number(cells[0]); if(!(lane>=1&&lane<=6)||by.has(lane))return;
-  // Racer rows contain weight/tilt before the timing block. We therefore identify the timing
-  // block by venue-specific physical ranges AND order, never by absolute column indexes or
-  // the first numeric token. This survives rowspan/colspan HTML without turning lane/weight
-  // values into exhibition measurements.
-  const vals=cells.flatMap(dec).map(n2).filter(x=>x!=null);
-  let found=null;
-  for(let i=0;i<vals.length;i++){
-   const ex=vals[i]; if(!(ex>=6.3&&ex<8.5))continue;
-   for(let j=i+1;j<Math.min(vals.length,i+4);j++){
-    const lap=vals[j]; if(!(lap>=34&&lap<43))continue;
-    for(let k=j+1;k<Math.min(vals.length,j+3);k++){
-     const turn=vals[k];
-     const turnOK=straight?(turn>=4.5&&turn<7.0):(turn>=10&&turn<13.5);
-     if(!turnOK)continue;
-     if(straight){
-      const st=vals[k+1]; if(!(st>=5.5&&st<8.5))continue;
-      found={time:ex.toFixed(2),lap:lap.toFixed(2),turn:turn.toFixed(2),straight:st.toFixed(2)};
-     }else found={time:ex.toFixed(2),lap:lap.toFixed(2),turn:turn.toFixed(2),straight:''};
-     break;
-    }
-    if(found)break;
-   }
-   if(found)break;
-  }
-  if(found)by.set(lane,{lane,...found});
- });
- const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
- const required=r=>r.time&&r.lap&&r.turn&&(!straight||r.straight);
- const complete=rows.filter(required).length;
- // Never advertise "original reflected" or feed AI ranking from a partially/mis-parsed table.
- // Six complete racer rows are required; otherwise the caller falls back to common official data.
- return {available:complete===6,rows:complete===6?rows:[1,2,3,4,5,6].map(l=>({lane:l})),completeTimes:complete===6?6:0,originalComplete:complete,source,lapLabel:'1周',provider,validation:complete===6?'strict-6of6':'rejected-partial'};
+function strictVenueRows(html,options){
+ // A range/order match can confuse weight or racer statistics with timings.
+ // Require labelled columns and an explicit boat number for venue fallbacks.
+ return parseVenueOriginalTable(html,options);
 }
 function parseSuminoeOriginal(html){
  return strictVenueRows(html,{source:'BOAT RACE住之江公式・オリジナル展示',provider:'suminoe-official-strict-v2',straight:false});
@@ -601,7 +591,7 @@ function parseHamanakoOriginal(html){
 }
 function parseBoatcastOriginal(text,jcd){
  const lines=String(text||'').replace(/\r/g,'').split('\n');
- if(!lines.length||!lines[0].trim().startsWith('data='))return {available:false,rows:[],source:'BOATCAST公式・オリジナル展示',provider:'boatcast'};
+ if(!lines.length||!lines[0].trim().startsWith('data='))return {available:false,rows:[],validation:'unrecognized-labels',source:'BOATCAST公式・オリジナル展示',provider:'boatcast'};
  const meta=(lines[1]||'').split('\t'), status=clean(meta[0]||''), count=Number(clean(meta[1]||''))||0;
  if(status!=='1')return {available:false,rows:[],status,measureCount:count,source:'BOATCAST公式・オリジナル展示',provider:'boatcast'};
  const labels=(lines[2]||'').split('\t').slice(0,count||3).map(x=>clean(x).replace(/　/g,'').replace(/\s/g,''));
@@ -622,7 +612,7 @@ function parseBoatcastOriginal(text,jcd){
     row.time=v;
   }else if(
     lab.includes('一周') ||
-    lab.includes('半周ラップ')
+    lab.includes('半周')
   ){
     row.lap=v;
   }else if(
@@ -639,22 +629,12 @@ function parseBoatcastOriginal(text,jcd){
   by.set(lane,row);
  }
  const rows=[1,2,3,4,5,6].map(l=>by.get(l)||{lane:l});
- const inRange=(v,min,max)=>v==null||v===''||(Number.isFinite(Number(v))&&Number(v)>=min&&Number(v)<max);
- const validRow=r=>inRange(r.time,6,9)&&inRange(r.lap,30,45)&&inRange(r.turn,4,15)&&inRange(r.straight,4,9);
- // BOATCAST feeds differ by venue: some publish only exhibition time while
- // others add lap/turn/straight. Availability must therefore be based on the
- // measurements the feed actually declares, not on optional original metrics.
- const knownLabels=labels.filter(l=>l.includes('展示タイム')||l==='展示'||l.includes('一周')||l.includes('半周ラップ')||l.includes('まわり足')||l.includes('回り足')||l.includes('直線'));
- const complete=knownLabels.length>0&&rows.every(r=>knownLabels.every(l=>{
-  if(l.includes('展示タイム')||l==='展示')return String(r.time||'').trim()!=='';
-  if(l.includes('一周')||l.includes('半周ラップ'))return String(r.lap||'').trim()!=='';
-  if(l.includes('まわり足')||l.includes('回り足'))return String(r.turn||'').trim()!=='';
-  if(l.includes('直線'))return String(r.straight||'').trim()!=='';
-  return true;
- }));
- const valid=complete&&rows.every(validRow);
- const venue=String(jcd).padStart(2,'0')==='06'?'浜名湖':String(jcd).padStart(2,'0');
- return {available:valid,rows:valid?rows:[1,2,3,4,5,6].map(l=>({lane:l})),status,measureCount:count,measureLabels:labels,source:`BOATCAST公式・${venue}オリジナル展示`,provider:'boatcast',validation:valid?'range-checked-6of6':complete?'rejected-range':'rejected-partial'};
+ const fields=[...new Set(labels.map(l=>l.includes('展示タイム')||l==='展示'?'time':l.includes('一周')||l.includes('半周')?'lap':l.includes('まわり足')||l.includes('回り足')?'turn':l.includes('直線')?'straight':null).filter(Boolean))];
+ const lapLabel=labels.some(l=>l.includes('半周'))?'半周':'1周',ranges={time:[6,9],lap:lapLabel==='半周'?[12,30]:[30,45],turn:[4,15],straight:[4,9]},rejected=[];
+ for(const row of rows)for(const f of fields){const v=row[f];if(v==null||v==='')continue;const n=Number(v),[min,max]=ranges[f];if(!Number.isFinite(n)||n<min||n>=max){rejected.push({lane:row.lane,field:f,value:v});delete row[f]}}
+ const counts=Object.fromEntries(fields.map(f=>[f,rows.filter(r=>r[f]).length]));
+ const complete=fields.length>0&&fields.every(f=>counts[f]===6);
+ return {available:fields.length>0&&rows.some(r=>fields.some(f=>r[f])),rows,status,measureCount:count,measureLabels:labels,completeTimes:counts.time||0,originalComplete:rows.filter(r=>fields.every(f=>r[f])).length,counts,rejected,lapLabel,source:`BOATCAST公式・${String(jcd).padStart(2,'0')}オリジナル展示`,provider:'boatcast',validation:rejected.length?'rejected-range':!fields.length?'unrecognized-labels':complete?'range-checked-6of6':'rejected-partial'};
 }
 async function getBoatcastOriginal(jcd,hd,rno){
  const jo=String(jcd).padStart(2,'0'),rr=String(rno).padStart(2,'0');
@@ -663,18 +643,24 @@ async function getBoatcastOriginal(jcd,hd,rno){
  const url=`https://race.boatcast.jp/txt/${jo}/bc_oriten_${hd}_${jo}_${rr}.txt`;
  const bust=Date.now();
  try{
-  const r=await fetch(`${url}?v=${bust}`,{cache:'no-store',headers:REQUEST_HEADERS});
-  if(!r.ok)throw new Error(String(r.status));
-  const txt=await r.text();
+  const txt=await freshText(url);
   return {...parseBoatcastOriginal(txt,jo),urlPattern:'race.boatcast.jp/txt/{場}/bc_oriten_{日付}_{場}_{R}.txt'};
  }catch(e){return {available:false,rows:[],source:'BOATCAST公式・オリジナル展示',provider:'boatcast',error:String(e?.message||e)}}
 }
 async function getOriginal(jcd,hd,rno,racers=[]){
  const a=ORIGINAL_SUPPORTED[jcd];if(!a)return {supported:false,available:false,rows:[],source:null};
  try{
+  if(['06','07','08','11','12','15','16','18','23','24'].includes(jcd)){
+   const feed=await getBoatcastOriginal(jcd,hd,rno);
+   if(feed.available)return {supported:true,venue:a.name,...feed,requestedDate:hd};
+  }
+  const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo'}).format(new Date()).replaceAll('-','');
+  if(jcd==='07')return {supported:true,venue:a.name,...await getBoatcastOriginal(jcd,hd,rno),requestedDate:hd};
+  if(['06','08','11','12','15','16'].includes(jcd))return {supported:true,available:false,rows:[],validation:'identity-unverified',reason:'The mutable venue page does not guarantee the requested date; use the date-bound official feed.'};
   if(jcd==='01'){
    const boatcast=await getBoatcastOriginal(jcd,hd,rno);
    if(boatcast.available)return {supported:true,venue:a.name,...boatcast,lapLabel:(boatcast.measureLabels||[]).some(x=>String(x).includes('半周'))?'半周':'1周',requestedDate:hd};
+   return {supported:true,available:false,rows:[],validation:'identity-unverified',reason:'Date-bound official feed unavailable'};
    const html=await grabUrl('https://www.kiryu-kyotei.com/modules/raceinfo/?page=index_timedata',15);
    return {supported:true,venue:a.name,...parseKiryuTimedata(html,racers),requestedDate:hd};
   }
@@ -784,8 +770,7 @@ if(jcd==='12'){
   if(jcd==='23'){
    const urls=[
     `https://www.boatrace-karatsu.jp/sp/index.php?page=yosou-cyokuzen&day=${hd}&race=${rno}`,
-    `https://www.boatrace-karatsu.jp/sp/index.php?page=yosou-cyokuzen&race=${rno}&day=${hd}`,
-    `https://www.boatrace-karatsu.jp/sp/index.php?page=yosou-cyokuzen&race=${rno}`
+    `https://www.boatrace-karatsu.jp/sp/index.php?page=yosou-cyokuzen&race=${rno}&day=${hd}`
    ];
    const settled=await Promise.allSettled(urls.map(u=>grabUrl(u,15)));
    const parsed=settled.filter(x=>x.status==='fulfilled').map(x=>parseKaratsuOriginal(x.value));
@@ -800,7 +785,7 @@ if(jcd==='12'){
 function mergeBefore(common,original){
  if(!original?.available)return {...common,original};
  const om=new Map((original.rows||[]).map(x=>[x.lane,x]));
- const rows=[1,2,3,4,5,6].map(l=>{const a=(common?.rows||[]).find(x=>x.lane===l)||{lane:l},b=om.get(l)||{};return {...a,st:b.st||a.st,time:b.time||a.time,lap:b.lap||'',turn:b.turn||'',straight:b.straight||'',originalSource:original.source}});
+ const rows=[1,2,3,4,5,6].map(l=>{const a=(common?.rows||[]).find(x=>x.lane===l)||{lane:l},b=om.get(l)||{};return {...a,st:a.st||b.st,time:a.time||b.time,lap:b.lap||'',turn:b.turn||'',straight:b.straight||'',originalSource:original.source}});
  return {...common,available:rows.some(r=>r.st||r.time||r.lap||r.turn||r.straight),rows,original,completeTimes:rows.filter(r=>r.time).length,completeST:rows.filter(r=>r.st).length};
 }
 
@@ -1078,11 +1063,70 @@ function parseOfficialSeason(html){
  return {period:period[1]?`${period[1]}〜${period[2]}`:'公式期別',winRate:num('勝率'),twoRate:num('2連対率','%?'),threeRate:num('3連対率','%?'),starts:num('出走回数'),avgST:num('平均スタートタイミング'),available:/集計期間/.test(body),source:'BOAT RACE公式'}
 }
 
+const SOURCE_TTL={card:60000,before:10000,original:20000,series:60000,odds:20000,result:20000};
+const sourceKey=(hd,jcd,rno,family)=>`${hd}:${jcd}:${rno}:${family}`;
+function originalStatus(original){
+ if(!original.supported)return 'unsupported';
+ if(original.error)return 'fetch-error';
+ if(original.validation==='rejected-range'||original.validation==='unrecognized-labels'||original.validation==='identity-unverified')return 'parse-error';
+ if(original.available){const fields=Object.keys(original.counts||{}).filter(f=>['time','lap','turn','straight'].includes(f));const incomplete=fields.length?fields.some(f=>original.counts[f]<6):original.originalComplete!=null&&original.originalComplete<6;return original.validation==='rejected-partial'||incomplete?'incomplete':'published'}
+ return original.validation==='rejected-partial'?'incomplete':'waiting';
+}
+function liveLoaders(hd,jcd,rno){
+ const path=name=>base+`${name}?hd=${hd}&jcd=${jcd}&rno=${rno}`;
+ const loaders={
+  card:async()=>{const html=await freshText(path('racelist')),race=parseRace(html),series=parseSeries(html,race.racers);return {status:race.laneVerified?'published':race.racers.length?'incomplete':'waiting',data:{race,series},source:'BOAT RACE公式',counts:{racers:race.racers.length,series:series.count}}},
+  before:async()=>{const html=await freshText(path('beforeinfo')),before=parseBefore(html),quality=exhibitionStatus(before.rows);return {status:before.rejected?.length?'parse-error':quality.ready?'published':before.available?'incomplete':(before.sourceHasExhibition||before.sourceHasST)?'parse-error':'waiting',data:before,counts:{time:quality.timeCount,st:quality.stCount,rejected:before.rejected?.length||0},source:'BOAT RACE公式',officialPublished:null}},
+  original:async()=>{const card=jcd==='01'?await loadSource(sourceKey(hd,jcd,rno,'card'),loaders.card,SOURCE_TTL.card):null;const original=await getOriginal(jcd,hd,rno,card?.data?.race?.racers||[]);if(original.error)throw new Error(original.error);return {status:originalStatus(original),data:original,counts:{time:original.completeTimes||0,original:original.originalComplete||0},source:original.source}},
+  odds:async()=>{const html=await freshText(path('odds3t')),odds=parseOdds(html),unique=new Set(odds.map(x=>x.combo));return {status:odds.length===120&&unique.size===120?'published':odds.length?'incomplete':'waiting',data:odds,counts:{odds:odds.length},source:'BOAT RACE公式'}},
+  result:async()=>{const html=await freshText(path('raceresult')),result=parseResult(html);return {status:result.available?(result.trifecta&&result.payout&&result.finish?.length>=3?'published':'incomplete'):'waiting',data:result,source:'BOAT RACE公式'}}
+ };
+ loaders.series=async()=>{const card=await loadSource(sourceKey(hd,jcd,rno,'card'),loaders.card,SOURCE_TTL.card);if(!card.data?.race?.racers?.length)throw new Error('racelist-unavailable');let series=card.data.series;if(jcd==='24'){try{const html=await freshText(`https://omurakyotei.jp/yosou/sp/syussou/?day=${hd}&race=${String(rno).padStart(2,'0')}`),other=parseOmuraSeries(html,card.data.race.racers);if(other.count>=series.count&&other.count)series=other}catch(e){if(series.status!=='complete')throw e}}return {status:series.status==='complete'||(series.status==='not-published'&&series.firstDay)?'published':series.count?'incomplete':series.status==='empty-or-unparsed'?'parse-error':'waiting',data:series,source:series.source||'BOAT RACE公式'}};
+ return loaders;
+}
+
+async function fullAudit(hd,fallbackRace,jstDate){
+ const codes=Object.keys(ORIGINAL_SUPPORTED),rows=[];
+ const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).map(x=>[x.type,x.value]));
+ const nowMin=Number(parts.hour)*60+Number(parts.minute);
+ let nextIndex=0;
+ const worker=async()=>{while(nextIndex<codes.length){const code=codes[nextIndex++],row={jcd:code,venue:ORIGINAL_SUPPORTED[code].name};
+  try{
+   const html=await freshText(base+`raceindex?hd=${hd}&jcd=${code}`),times=parseSchedule(html);
+   if(times.length!==12){const absent=/データがありません/.test(clean(cheerio.load(html)('body').text()));rows.push({...row,hosting:absent?false:null,status:absent?'not-hosting':'schedule-parse-error',needsReview:!absent,schedule:{status:absent?'waiting':'parse-error'},race:{status:'waiting',racers:0},before:{status:'waiting',exhibitionTimes:0,startTiming:0},original:{status:'waiting'},series:{status:'waiting'},odds:{status:'waiting',count:0},result:{status:'waiting'}});continue}
+   const next=hd===jstDate?times.findIndex(t=>{const [h,m]=t.split(':').map(Number);return h*60+m>nowMin}):-1;
+   const raceNo=next>=0?next+1:12,loaders=liveLoaders(hd,code,raceNo),families=['card','before','original','series','odds','result'];
+   const pairs=await Promise.all(families.map(async family=>{
+    const key=sourceKey(hd,code,raceNo,family);let value=await loadSource(key,loaders[family],SOURCE_TTL[family]);
+    if(value.status==='fetch-error'){value={...await loadSource(key,loaders[family],SOURCE_TTL[family]),retried:true}}
+    return [family,value];
+   })),sources=Object.fromEntries(pairs);
+   const describe=v=>({status:v.status,fetchedAt:v.fetchedAt,ageMs:v.fetchedAt?Date.now()-Date.parse(v.fetchedAt):null,durationMs:v.durationMs,cache:v.cache,counts:v.counts||null,error:v.error||null,retried:!!v.retried});
+   const issues=families.filter(f=>['fetch-error','parse-error','incomplete'].includes(sources[f].status));
+   rows.push({...row,hosting:true,rno:raceNo,schedule:{status:'published',deadline:times[raceNo-1]},status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
+    race:{...describe(sources.card),racers:sources.card.data?.race?.racers?.length||0},
+    before:{...describe(sources.before),exhibitionTimes:sources.before.counts?.time||0,startTiming:sources.before.counts?.st||0,rejected:sources.before.data?.rejected||[]},
+    original:{...describe(sources.original),provider:sources.original.data?.provider,measureLabels:sources.original.data?.measureLabels||[],validation:sources.original.data?.validation,counts:sources.original.data?.counts||null},
+    series:{...describe(sources.series),parsed:sources.series.data?.count||0,seriesStatus:sources.series.data?.status},
+    odds:{...describe(sources.odds),count:sources.odds.data?.length||0},result:{...describe(sources.result),available:sources.result.data?.available||false,trifecta:sources.result.data?.trifecta||null}});
+  }catch(e){rows.push({...row,hosting:null,status:'schedule-fetch-error',needsReview:true,error:String(e?.message||e)})}
+ }};
+ await Promise.all(Array.from({length:3},worker));rows.sort((a,b)=>a.jcd.localeCompare(b.jcd));
+ const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
+ return {ok:true,hd,mode:hd===jstDate?'current-next':'completed-day',fallbackRace,summary:{venues:24,hosting:hosting.length,healthy:hosting.filter(x=>!x.needsReview).length,needsReview:review.length},rows,review,updatedAt:new Date().toISOString()};
+}
+
+function calendarStream(hd){
+ const encoder=new TextEncoder(),codes=Object.keys(ORIGINAL_SUPPORTED);let stopped=false,index=0;
+ return new ReadableStream({async start(controller){const worker=async()=>{while(index<codes.length&&!stopped){const jcd=codes[index++],value=await loadSource(`${hd}:${jcd}:1:schedule`,async()=>{const html=await freshText(base+`raceindex?hd=${hd}&jcd=${jcd}`),times=parseSchedule(html),absent=/データがありません/.test(clean(cheerio.load(html)('body').text()));return {status:times.length===12||absent?'published':'parse-error',data:{times,meeting:parseMeetingMeta(html,hd),hosting:times.length===12?true:absent?false:null}}},120000);if(!stopped)controller.enqueue(encoder.encode(JSON.stringify({jcd,...value})+'\n'))}};await Promise.allSettled(Array.from({length:4},worker));if(!stopped)controller.close()},cancel(){stopped=true}});
+}
+
 export async function GET(req){
  const q=new URL(req.url).searchParams;
  const jstDate=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()).replace(/-/g,'');
  const kind=q.get('kind')||'core';
  const hd=q.get('hd')||jstDate,jcd=q.get('jcd')||(kind==='fullaudit'?'01':null),rno=q.get('rno')||(kind==='fullaudit'?'1':null);
+ if(kind==='calendar'){if(!/^\d{8}$/.test(hd))return Response.json({ok:false},{status:400});return new Response(calendarStream(hd),{headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store'}})}
  if(kind==='racersearch'){
   const term=clean(q.get('q')||''); if(!term)return Response.json({ok:true,rows:[]});
   try{const isReg=/^\d{4}$/.test(term),url=isReg?`https://www.boatrace.jp/owpc/pc/data/racersearch/result?prevpgid=TDAT320&toban_left=${term}`:`https://www.boatrace.jp/owpc/pc/data/racersearch/result?prevpgid=TDAT320&name=${encodeURIComponent(term)}`;const html=await grabUrl(url,300);return Response.json({ok:true,rows:parseRacerSearch(html)})}catch{return Response.json({ok:false,rows:[]})}
@@ -1105,6 +1149,13 @@ export async function GET(req){
  }
  if(!/^\d{8}$/.test(hd||'')||!/^\d{2}$/.test(jcd||'')||!/^(?:[1-9]|1[0-2])$/.test(rno||''))return Response.json({ok:false},{status:400});
  try{
+  if(kind==='live'||kind==='snapshot'){
+   const identity={hd,jcd,rno:Number(rno)},loaders=liveLoaders(hd,jcd,rno);
+   const families=[...new Set((q.get('families')||'card,before,original,odds').split(','))].filter(x=>loaders[x]);
+   if(!families.length)return Response.json({ok:false,error:'invalid-families'},{status:400});
+   const data=await streamSources(identity,families,loaders,SOURCE_TTL,kind==='snapshot');
+   return kind==='snapshot'?Response.json({ok:true,...data},{headers:{'Cache-Control':'no-store'}}):new Response(data,{headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store, max-age=0','X-Accel-Buffering':'no'}});
+  }
   if(kind==='schedule'){
    const html=await grab(`raceindex?hd=${hd}&jcd=${jcd}`,60),times=parseSchedule(html);
    const meeting=parseMeetingMeta(html,hd);
@@ -1142,113 +1193,22 @@ export async function GET(req){
    const html=await grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,45),race=parseRace(html);
    return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race},{headers:{'Cache-Control':'public, s-maxage=45, stale-while-revalidate=180'}})
   }
-  if(kind==='before'){
-   // Exhibition is the most time-sensitive feed. Bypass both upstream and response
-   // caches so a pre-publication beforeinfo page cannot survive after the official update.
-   const beforeUrl=base+`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}&_=${Date.now()}`;
-   const [bb,oo]=await Promise.allSettled([
-    fetch(beforeUrl,{cache:'no-store',headers:REQUEST_HEADERS}).then(r=>{if(!r.ok)throw new Error(String(r.status));return r.text()}),
-    getOriginal(jcd,hd,rno)
-   ]);
-   const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]},before=mergeBefore(commonBefore,original);
-   if(bb.status==='rejected'&&!original.available)return Response.json({ok:false,error:'公式展示の取得に失敗しました'},{status:502,headers:{'Cache-Control':'no-store'}});
-   return Response.json({ok:true,updatedAt:new Date().toISOString(),before},{headers:{'Cache-Control':'no-store, max-age=0'}})
+  if(kind==='before'||kind==='original'){
+   const family=kind,loader=liveLoaders(hd,jcd,rno)[family],value=await loadSource(sourceKey(hd,jcd,rno,family),loader,SOURCE_TTL[family]);
+   // The standard exhibition response never waits for a venue's optional measurements.
+   const original=kind==='before'?await peekSource(sourceKey(hd,jcd,rno,'original')):null;
+   const before=kind==='before'?mergeBefore(value.data||{rows:[]},original?.status==='published'&&Date.now()-Date.parse(original.fetchedAt)<90000?original.data:null):null;
+   return Response.json({ok:!!value.data,identity:{hd,jcd,rno:Number(rno)},updatedAt:value.fetchedAt,status:value.status,meta:value,...(before?{before}:{original:value.data})},{status:value.data?200:502,headers:{'Cache-Control':'no-store, max-age=0'}});
   }
   if(kind==='result'){
-   const html=await grab(`raceresult?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),result=parseResult(html);
-   return Response.json({ok:true,result,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=20, stale-while-revalidate=120'}})
+   const value=await loadSource(sourceKey(hd,jcd,rno,'result'),liveLoaders(hd,jcd,rno).result,SOURCE_TTL.result);
+   return Response.json({ok:!!value.data,result:value.data,updatedAt:value.fetchedAt,status:value.status},{headers:{'Cache-Control':'no-store'}});
   }
   if(kind==='odds'){
    const html=await grab(`odds3t?hd=${hd}&jcd=${jcd}&rno=${rno}`,15),odds=parseOdds(html);
-   return Response.json({ok:true,updatedAt:new Date().toISOString(),odds,count:odds.length},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
+   return Response.json({ok:true,updatedAt:new Date().toISOString(),odds,count:odds.length},{headers:{'Cache-Control':'no-store'}})
   }
-  if(kind==='fullaudit'){
-   // Scheduled health audit: select each venue's current/next race from the official
-   // deadline schedule instead of auditing fixed R1 all day.
-   const fallbackRace=Number(rno||1),venues=Object.keys(ORIGINAL_SUPPORTED);
-   // Read Japan time directly from Intl parts. Avoid reconstructing a Date from a
-   // localized string, which can shift the hour when the server itself runs in UTC.
-   const jstParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
-   const nowMin=Number(jstParts.hour)*60+Number(jstParts.minute);
-   const rows=await Promise.all(venues.map(async code=>{
-    const venue=ORIGINAL_SUPPORTED[code]?.name||code;
-    try{
-     let raceNo=fallbackRace,scheduleStatus='fallback';
-     try{
-      const indexHtml=await grab(`raceindex?hd=${hd}&jcd=${code}`,60),times=parseSchedule(indexHtml);
-      if(times.length===12){
-       scheduleStatus='official';
-       const mins=times.map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m});
-       const next=mins.findIndex(x=>x>nowMin);
-       raceNo=next>=0?next+1:12;
-      }
-     }catch{}
-     const [rr,bb,or,od,res]=await Promise.allSettled([
-      grab(`racelist?hd=${hd}&jcd=${code}&rno=${raceNo}`,60),
-      grab(`beforeinfo?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
-      getOriginal(code,hd,raceNo),
-      grab(`odds3t?hd=${hd}&jcd=${code}&rno=${raceNo}`,20),
-      grab(`raceresult?hd=${hd}&jcd=${code}&rno=${raceNo}`,20)
-     ]);
-     if(rr.status!=='fulfilled')return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'racelist-fetch-error',needsReview:true,issues:['racelist-fetch']};
-     const race=parseRace(rr.value).racers;
-     if(race.length!==6)return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:false,status:'not-hosting-or-racelist-parse',needsReview:true,issues:['racelist-unverified']};
-     const series=parseSeries(rr.value,race);
-     const before=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],completeTimes:0,completeST:0};
-     const original=or.status==='fulfilled'?or.value:{available:false,rows:[],error:'fetch-error'};
-     const odds=od.status==='fulfilled'?parseOdds(od.value):[];
-     const result=res.status==='fulfilled'?parseResult(res.value):{available:false,finish:[],trifecta:null,payout:null};
-     const exhibition=exhibitionStatus(mergeBefore(before,original).rows);
-     const issues=[];
-     if(series.status==='partial'||series.status==='empty-or-unparsed')issues.push('series');
-     // Before/original/odds can legitimately be unpublished hours before the race.
-     // Transport/parser errors are always reviewable; simple absence is reported but not failed.
-     if(bb.status==='rejected')issues.push('before-fetch');
-     if(or.status==='rejected'||original.error)issues.push('original-fetch');
-     if(od.status==='rejected')issues.push('odds-fetch');
-     if(res.status==='rejected')issues.push('result-fetch');
-     if(exhibition.invalid)issues.push('before-parse');
-     if(od.status==='fulfilled'&&odds.length>0&&odds.length!==120)issues.push('odds-partial');
-     // Result is legitimately absent for the current/next race. Only validate its shape once published.
-     if(result.available&&(!result.trifecta||!result.payout||result.finish.length<3))issues.push('result-parse');
-     return {jcd:code,venue,rno:raceNo,scheduleStatus,hosting:true,status:issues.length?'review':'ok',needsReview:issues.length>0,issues,
-      race:{racers:race.length},series:{parsed:series.count||0,runCount:series.runCount||0,status:series.status},
-      before:{available:!!before.available,exhibitionTimes:exhibition.timeCount,startTiming:exhibition.stCount,status:bb.status==='rejected'?'fetch-error':exhibition.invalid?'parse-error':exhibition.ready?'normal':before.available?'partial':'unpublished'},
-      original:{available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null},
-      odds:{count:odds.length,status:od.status==='rejected'?'fetch-error':odds.length===120?'normal':odds.length?'partial':'unpublished'},
-      result:{available:!!result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0,status:res.status==='rejected'?'fetch-error':result.available?'normal':'unpublished'}};
-    }catch(e){return {jcd:code,venue,hosting:false,status:'audit-error',needsReview:true,error:String(e?.message||e)}}
-   }));
-   // Retry only real audit failures once. Pre-race absence is not a failure and is not retried.
-   const suspects=rows.filter(x=>x.needsReview);
-   if(suspects.length){
-    await new Promise(resolve=>setTimeout(resolve,350));
-    await Promise.all(suspects.map(async item=>{
-     try{
-      const issues=new Set(item.issues||[]),retried=[];
-      if([...issues].some(x=>x==='series'||x.startsWith('racelist-'))){
-       retried.push('racelist');const html=await grab(`racelist?hd=${hd}&jcd=${item.jcd}&rno=${item.rno}`,1),racers=parseRace(html).racers;
-       if(racers.length===6){issues.delete('racelist-fetch');issues.delete('racelist-unverified');item.hosting=true;const series=parseSeries(html,racers);item.series={parsed:series.count||0,runCount:series.runCount||0,status:series.status};if(series.status!=='partial'&&series.status!=='empty-or-unparsed')issues.delete('series')}
-      }
-      const retryFetch=async(family,path,parse)=>{if(!issues.has(family+'-fetch'))return;retried.push(family);try{const html=await grab(`${path}?hd=${hd}&jcd=${item.jcd}&rno=${item.rno}`,1);item[family]=parse(html);issues.delete(family+'-fetch')}catch{}};
-      await Promise.all([
-       retryFetch('before','beforeinfo',html=>{const before=parseBefore(html),status=exhibitionStatus(before.rows);return {available:before.available,exhibitionTimes:status.timeCount,startTiming:status.stCount,status:status.invalid?'parse-error':status.ready?'normal':before.available?'partial':'unpublished'}}),
-       retryFetch('odds','odds3t',html=>{const odds=parseOdds(html);return {count:odds.length,status:odds.length===120?'normal':odds.length?'partial':'unpublished'}}),
-       retryFetch('result','raceresult',html=>{const result=parseResult(html);return {available:result.available,trifecta:result.trifecta||null,payout:result.payout||null,finishCount:result.finish?.length||0,status:result.available?'normal':'unpublished'}})
-      ]);
-      if(issues.has('original-fetch')){retried.push('original');try{const original=await getOriginal(item.jcd,hd,item.rno);if(!original.error){item.original={available:!!original.available,completeTimes:original.completeTimes||0,originalComplete:original.originalComplete||0,provider:original.provider||null};issues.delete('original-fetch')}}catch{}}
-      item.retry={attempted:true,families:retried};item.issues=[...issues];
-      item.needsReview=item.issues.length>0;item.status=item.needsReview?'review':'ok';
-      if(!item.needsReview)item.recovered=true;
-     }catch(e){item.retry={attempted:true,status:'fetch-error'}}
-    }));
-   }
-   const hosting=rows.filter(x=>x.hosting),review=rows.filter(x=>x.needsReview);
-   const summary={venues:24,hosting:hosting.length,healthy:hosting.filter(x=>x.status==='ok').length,needsReview:review.length,recovered:rows.filter(x=>x.recovered).length};
-   if(review.length)console.warn('[full-audit]',JSON.stringify({hd,mode:'current-next',summary,review:review.map(x=>({jcd:x.jcd,venue:x.venue,rno:x.rno,status:x.status,issues:x.issues||[]}))}));
-   else console.log('[full-audit]',JSON.stringify({hd,mode:'current-next',summary}));
-   return Response.json({ok:true,hd,mode:'current-next',fallbackRace,summary,review,rows,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}})
-  }
+  if(kind==='fullaudit')return Response.json(await fullAudit(hd,Number(rno),jstDate),{headers:{'Cache-Control':'no-store'}});
   if(kind==='seriesaudit'){
    // One request audits all 24 venues for current-series parser completeness.
    // Non-hosting venues are reported separately instead of being counted as parser failures.
@@ -1323,12 +1283,12 @@ export async function GET(req){
   let rr,bb,original;
   if(jcd==='01'){
    [rr,bb]=await Promise.allSettled([grab(`racelist?hd=${hd}&jcd=${jcd}&rno=${rno}`,45),grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20)]);
-   if(rr.status!=='fulfilled')return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}});
+   if(rr.status!=='fulfilled')return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
    const race=parseRace(rr.value);
    const [oo]=await Promise.allSettled([getOriginal(jcd,hd,rno,race.racers)]);
    original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]};
    const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},before=mergeBefore(commonBefore,original);
-   return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race,before},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
+   return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race,before},{headers:{'Cache-Control':'no-store'}})
   }
   let oo;
   [rr,bb,oo]=await Promise.allSettled([
@@ -1336,10 +1296,10 @@ export async function GET(req){
    grab(`beforeinfo?hd=${hd}&jcd=${jcd}&rno=${rno}`,20),
    getOriginal(jcd,hd,rno)
   ]);
-  if(rr.status!=='fulfilled')return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}});
+  if(rr.status!=='fulfilled')return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
   const race=parseRace(rr.value);
   original=oo.status==='fulfilled'?oo.value:{supported:false,available:false,rows:[]};
   const commonBefore=bb.status==='fulfilled'?parseBefore(bb.value):{available:false,rows:[],weather:{}},before=mergeBefore(commonBefore,original);
-  return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race,before},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})
- }catch(e){return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'public, s-maxage=15, stale-while-revalidate=120'}})}
+  return Response.json({ok:race.racers.length===6,source:'BOAT RACE公式',updatedAt:new Date().toISOString(),race,before},{headers:{'Cache-Control':'no-store'}})
+ }catch(e){return Response.json({ok:false,updatedAt:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}})}
 }
