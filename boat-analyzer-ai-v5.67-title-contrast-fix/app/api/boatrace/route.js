@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import {officialText} from '../../lib/official-http.js';
 import {normalizeExhibitionST,validExhibitionTime,exhibitionStatus} from '../../exhibition.js';
 import {loadSource,peekSource,streamSources} from '../../lib/live-store.js';
 export const dynamic='force-dynamic';
@@ -13,8 +14,8 @@ const inflight=new Map();
 async function cachedText(url,ttl){
  const key=url;
  if(inflight.has(key))return inflight.get(key);
- const task=fetch(url,{...(ttl<=300?{cache:'no-store'}:{next:{revalidate:ttl}}),signal:AbortSignal.timeout(8000),headers:REQUEST_HEADERS})
-  .then(r=>{if(!r.ok)throw new Error(String(r.status));return r.text()})
+ const task=(process.env.VERCEL==='1'&&ttl<=300&&new URL(url).hostname==='www.boatrace.jp'?officialText(url,REQUEST_HEADERS):fetch(url,{...(ttl<=300?{cache:'no-store'}:{next:{revalidate:ttl}}),signal:AbortSignal.timeout(8000),headers:REQUEST_HEADERS})
+  .then(r=>{if(!r.ok)throw new Error(String(r.status));return r.text()}))
   .finally(()=>inflight.delete(key));
  inflight.set(key,task);
  return task;

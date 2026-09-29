@@ -54,3 +54,5 @@ An unconditional “all venues / all publication timings / always prewarmed with
 ## Production follow-up
 
 Deployment `8f7762d7` was READY, but its region was iad1 despite route preferredRegion hnd1. BOATCAST succeeded in 526ms while official card/before/odds aborted at 8000ms. Added project-level vercel.json regions [hnd1] to make the Tokyo deployment explicit. Region/official fetch recovery must be verified on the next production deployment.
+
+Tokyo rollout was READY at dac45d1b, with hnd1 confirmed in deployment metadata and request header. Official requests still timed out while BOATCAST completed in 51ms; region alone did not resolve the issue. Testing explicit IPv4/HTTP1 official-host transport on Vercel, with TLS verification and the same 8s timeout. Local proxy environments retain fetch. This is a connection hypothesis until production recovery is observed.
